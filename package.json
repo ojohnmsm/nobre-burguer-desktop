@@ -55,7 +55,8 @@
     "publish": {
       "provider": "github",
       "owner": "ojohnmsm",
-      "repo": "nobre-burguer-desktop"
+      "repo": "nobre-burguer-desktop",
+      "releaseType": "release"
     }
   }
 }
