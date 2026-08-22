@@ -100,7 +100,7 @@ export function Settings({ onSaved }: Props) {
             <input
               id="desktop-token"
               type={showToken ? 'text' : 'password'}
-              placeholder={config.desktopApiKeyConfigured ? 'Token já configurado — informe outro para substituir' : 'Cole o DESKTOP_API_KEY'}
+              placeholder={config.desktopApiKeyConfigured ? 'Token já configurado — informe outro para substituir' : 'Cole o token desta loja'}
               value={desktopApiKey}
               onChange={event => setDesktopApiKey(event.target.value)}
               className="w-full bg-[#1a1a1a] border border-[#333] rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-amber-500 pr-10"
@@ -116,7 +116,8 @@ export function Settings({ onSaved }: Props) {
           </div>
           <p className="text-[11px] text-gray-600 mt-1 flex gap-1.5">
             <KeyRound size={12} className="mt-px flex-shrink-0" />
-            Use o mesmo token definido como <code>DESKTOP_API_KEY</code> no servidor.
+            Token desta loja, gerado no painel. Cada loja tem o seu — não é
+            mais o token único do servidor.
           </p>
         </div>
       </section>
