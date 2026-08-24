@@ -36,7 +36,8 @@
     "appId": "shop.cardapia.desktop",
     "productName": "Cardapia",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "asar": true,
     "win": {
