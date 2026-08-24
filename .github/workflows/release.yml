@@ -42,6 +42,26 @@ jobs:
       - name: Conferir tipos
         run: npm run typecheck
 
+      # A RELEASE É CRIADA AQUI, ANTES do electron-builder.
+      #
+      # Ele dispara o publicador mais de uma vez (uma por artefato), e as
+      # chamadas correm para criar a release da tag. Na v1.1.2 nasceram DUAS
+      # com a mesma tag, no mesmo segundo: uma ficou com o instalador e o
+      # latest.yml, a outra só com o blockmap. Qual delas o /releases/latest
+      # devolve é sorte — e é justamente ela que o atualizador consulta.
+      #
+      # Com a release já existindo, não há o que disputar: os dois publicadores
+      # apenas anexam arquivos nela.
+      - name: Criar a release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 \
+            || gh release create "${GITHUB_REF_NAME}" \
+                 --title "${GITHUB_REF_NAME}" \
+                 --notes "Instalador do Cardapia para Windows."
+
       - name: Construir e publicar
         env:
           # Fornecido pelo próprio GitHub. Não é preciso criar segredo nenhum.
@@ -57,6 +77,15 @@ jobs:
         run: |
           # Uma release sem latest.yml parece publicada e não atualiza ninguém.
           # Falhar aqui é melhor que descobrir semanas depois, pelo silêncio.
+          # Duplicata é o defeito que originou este passo: com duas releases
+          # na mesma tag, metade dos arquivos vai para cada uma e o atualizador
+          # lê a que o GitHub escolher.
+          quantas=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --jq "[.[] | select(.tag_name == \"${GITHUB_REF_NAME}\")] | length")
+          if [ "$quantas" != "1" ]; then
+            echo "::error::${quantas} releases com a tag ${GITHUB_REF_NAME} — os arquivos ficaram divididos entre elas"
+            exit 1
+          fi
+
           arquivos=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')
           echo "$arquivos"
           echo "$arquivos" | grep -q '\.exe$'      || { echo "::error::instalador .exe não subiu"; exit 1; }
