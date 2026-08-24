@@ -22,6 +22,13 @@ export type OrderChannel = 'web' | 'whatsapp'
 
 export interface Order {
   id: string
+  /**
+   * De qual loja este pedido veio, quando o computador atende mais de uma.
+   * Vem do aplicativo, não do servidor — é o identificador da conexão local,
+   * e é ele que faz "em preparo" voltar para o servidor certo.
+   */
+  connectionId?: string
+  storeLabel?: string
   customer_name: string
   customer_phone: string
   fulfillment_type: FulfillmentType

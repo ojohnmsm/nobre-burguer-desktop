@@ -8,6 +8,7 @@ interface Props {
 }
 
 const EMPTY_CONFIG: DesktopConfig = {
+  connections: [],
   apiBaseUrl: '',
   desktopApiKeyConfigured: false,
   printerName: '',
@@ -22,6 +23,7 @@ export function Settings({ onSaved }: Props) {
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
   const [showToken, setShowToken] = useState(false)
+  const [novaUrl, setNovaUrl] = useState('')
 
   useEffect(() => {
     window.api.getConfig().then(setConfig).catch(() => setError('Não foi possível ler as configurações'))
@@ -32,11 +34,38 @@ export function Settings({ onSaved }: Props) {
     setConfig(current => ({ ...current, [key]: value }))
   }
 
+  async function recarregar() {
+    const atual = await window.api.getConfig()
+    setConfig(atual)
+  }
+
+  async function adicionarLoja() {
+    setError('')
+    const resultado = await window.api.addConnection(novaUrl, desktopApiKey)
+    if (resultado.erro) { setError(resultado.erro); return }
+
+    setNovaUrl('')
+    setDesktopApiKey('')
+    await recarregar()
+    // Avisa a tela principal: ela precisa buscar os pedidos da loja nova e
+    // perguntar o nome dela ao servidor.
+    onSaved()
+  }
+
+  async function removerLoja(id: string, nome: string) {
+    const certeza = window.confirm(
+      `Desligar ${nome || 'esta loja'} deste computador? Os pedidos dela param de aparecer aqui.`
+    )
+    if (!certeza) return
+
+    await window.api.removeConnection(id)
+    await recarregar()
+    onSaved()
+  }
+
   async function save() {
     setError('')
     const input: DesktopConfigInput = {
-      apiBaseUrl: config.apiBaseUrl,
-      desktopApiKey: desktopApiKey || undefined,
       printerName: config.printerName,
       autoPrint: config.autoPrint,
       autoStart: config.autoStart,
@@ -44,8 +73,6 @@ export function Settings({ onSaved }: Props) {
 
     try {
       await window.api.saveConfig(input)
-      setConfig(current => ({ ...current, desktopApiKeyConfigured: current.desktopApiKeyConfigured || Boolean(desktopApiKey) }))
-      setDesktopApiKey('')
       setSaved(true)
       window.setTimeout(() => { setSaved(false); onSaved() }, 800)
     } catch (saveError) {
@@ -79,28 +106,49 @@ export function Settings({ onSaved }: Props) {
 
       <section className="bg-[#141414] border border-[#2a2a2a] rounded-2xl p-4 space-y-3">
         <div className="flex items-center gap-2 text-sm font-semibold text-gray-300 mb-1">
-          <Link2 size={15} className="text-amber-400" /> Integração do servidor
+          <Link2 size={15} className="text-amber-400" /> Lojas neste computador
         </div>
 
-        <div>
-          <label className="block text-xs text-gray-400 mb-1 font-medium" htmlFor="api-base-url">URL do cardápio</label>
+        {config.connections.length === 0 && (
+          <p className="text-xs text-gray-500">
+            Nenhuma loja ligada ainda. Adicione a primeira abaixo.
+          </p>
+        )}
+
+        {config.connections.map(conexao => (
+          <div
+            key={conexao.id}
+            className="flex items-center gap-3 bg-[#1a1a1a] border border-[#333] rounded-xl px-3 py-2.5"
+          >
+            <div className="flex-1 min-w-0">
+              <p className="text-sm text-white truncate">{conexao.label || 'Loja sem nome'}</p>
+              <p className="text-[11px] text-gray-600 truncate">{conexao.apiBaseUrl}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => removerLoja(conexao.id, conexao.label)}
+              className="text-red-400 hover:bg-red-500/10 rounded-lg px-2 py-1.5 text-xs"
+            >
+              Remover
+            </button>
+          </div>
+        ))}
+
+        <div className="border-t border-[#2a2a2a] pt-3 space-y-2">
+          <p className="text-xs text-gray-400 font-medium">Ligar outra loja</p>
+
           <input
-            id="api-base-url"
             type="url"
-            placeholder="https://seu-dominio.com"
-            value={config.apiBaseUrl}
-            onChange={event => update('apiBaseUrl', event.target.value)}
+            placeholder="https://cardapia.shop"
+            value={novaUrl}
+            onChange={event => setNovaUrl(event.target.value)}
             className="w-full bg-[#1a1a1a] border border-[#333] rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-amber-500"
           />
-        </div>
 
-        <div>
-          <label className="block text-xs text-gray-400 mb-1 font-medium" htmlFor="desktop-token">Token de integração</label>
           <div className="relative">
             <input
-              id="desktop-token"
               type={showToken ? 'text' : 'password'}
-              placeholder={config.desktopApiKeyConfigured ? 'Token já configurado — informe outro para substituir' : 'Cole o token desta loja'}
+              placeholder="Código gerado no painel da loja"
               value={desktopApiKey}
               onChange={event => setDesktopApiKey(event.target.value)}
               className="w-full bg-[#1a1a1a] border border-[#333] rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-amber-500 pr-10"
@@ -109,15 +157,25 @@ export function Settings({ onSaved }: Props) {
               type="button"
               onClick={() => setShowToken(current => !current)}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
-              aria-label={showToken ? 'Ocultar token' : 'Mostrar token'}
+              aria-label={showToken ? 'Ocultar código' : 'Mostrar código'}
             >
               {showToken ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
           </div>
-          <p className="text-[11px] text-gray-600 mt-1 flex gap-1.5">
+
+          <button
+            type="button"
+            onClick={adicionarLoja}
+            disabled={!novaUrl.trim() || !desktopApiKey.trim()}
+            className="w-full bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-black font-semibold rounded-xl py-2.5 text-sm transition-colors"
+          >
+            Ligar loja
+          </button>
+
+          <p className="text-[11px] text-gray-600 flex gap-1.5">
             <KeyRound size={12} className="mt-px flex-shrink-0" />
-            Token desta loja, gerado no painel. Cada loja tem o seu — não é
-            mais o token único do servidor.
+            Cada loja tem o próprio código, gerado em Integrações no painel dela.
+            Duas lojas no mesmo computador recebem pedidos lado a lado.
           </p>
         </div>
       </section>

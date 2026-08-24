@@ -97,6 +97,112 @@ function storeDesktopApiKey(config: Record<string, string>, token: string) {
   delete config.desktopApiKeyEncrypted
 }
 
+/**
+ * UMA loja ligada a este computador.
+ *
+ * O aplicativo guardava uma conexão só — um endereço e um código. Duas lojas no
+ * mesmo balcão é caso real: cada uma tem cardápio, atendente, WhatsApp e conta
+ * de recebimento próprios, mas quem prepara é a mesma cozinha.
+ */
+export interface StoreConnection {
+  /** Estável, gerado uma vez. É por ele que o pedido sabe para onde voltar. */
+  id: string
+  apiBaseUrl: string
+  desktopApiKey: string
+  /** Nome vindo do servidor. Usado nas etiquetas de cada pedido na tela. */
+  label: string
+}
+
+interface ConnectionRecord {
+  id: string
+  apiBaseUrl: string
+  apiKeyEncrypted?: string
+  apiKey?: string
+  label?: string
+}
+
+function decodeKey(record: ConnectionRecord): string {
+  if (record.apiKeyEncrypted && safeStorage.isEncryptionAvailable()) {
+    try {
+      return safeStorage.decryptString(Buffer.from(record.apiKeyEncrypted, 'base64')).trim()
+    } catch {
+      // Cifrado para outro usuário do sistema: indisponível, não corrompido.
+      return ''
+    }
+  }
+  return record.apiKey?.trim() || ''
+}
+
+function encodeKey(record: ConnectionRecord, token: string) {
+  if (safeStorage.isEncryptionAvailable()) {
+    record.apiKeyEncrypted = safeStorage.encryptString(token).toString('base64')
+    delete record.apiKey
+    return
+  }
+  record.apiKey = token
+  delete record.apiKeyEncrypted
+}
+
+function urlValida(url: string): boolean {
+  try {
+    return ['http:', 'https:'].includes(new URL(url).protocol)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Lê a lista de conexões, MIGRANDO a configuração antiga de uma loja só.
+ *
+ * A migração acontece na leitura e não numa rotina à parte: quem já tem o
+ * aplicativo instalado abre e continua funcionando, sem reconfigurar nada. Sem
+ * isso, a atualização apagaria a conexão existente e o balcão pararia de
+ * receber pedido até alguém digitar o código de novo.
+ */
+function readConnections(): ConnectionRecord[] {
+  const config = loadConfig() as Record<string, unknown>
+
+  const lista = config.connections
+  if (Array.isArray(lista) && lista.length > 0) return lista as ConnectionRecord[]
+
+  const apiBaseUrl = String(config.apiBaseUrl ?? '').trim().replace(/\/+$/, '')
+  const legado = readDesktopApiKey(config as Record<string, string>)
+  if (!apiBaseUrl || !legado) return []
+
+  const migrada: ConnectionRecord = { id: 'principal', apiBaseUrl }
+  encodeKey(migrada, legado)
+  return [migrada]
+}
+
+function writeConnections(lista: ConnectionRecord[]) {
+  const config = loadConfig() as Record<string, unknown>
+  config.connections = lista
+  // Os campos antigos saem para não existirem duas verdades sobre a mesma
+  // conexão — se ficassem, uma edição futura poderia gravar num e ler do outro.
+  delete config.apiBaseUrl
+  delete config.desktopApiKey
+  delete config.desktopApiKeyEncrypted
+  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2))
+}
+
+function getConnections(): StoreConnection[] {
+  return readConnections()
+    .map((r) => ({
+      id: r.id,
+      apiBaseUrl: r.apiBaseUrl?.trim().replace(/\/+$/, '') ?? '',
+      desktopApiKey: decodeKey(r),
+      label: r.label ?? '',
+    }))
+    .filter((c) => c.apiBaseUrl && c.desktopApiKey && urlValida(c.apiBaseUrl))
+}
+
+/** A conexão de um id — ou a primeira, para o que ainda não é por loja. */
+function getConnection(connectionId?: string): StoreConnection | null {
+  const todas = getConnections()
+  if (!connectionId) return todas[0] ?? null
+  return todas.find((c) => c.id === connectionId) ?? null
+}
+
 interface DesktopConfigInput {
   apiBaseUrl?: string
   desktopApiKey?: string
@@ -107,56 +213,85 @@ interface DesktopConfigInput {
 
 function getConfigView() {
   const config = loadConfig()
+  const conexoes = getConnections()
   return {
-    apiBaseUrl: config.apiBaseUrl || '',
-    desktopApiKeyConfigured: Boolean(readDesktopApiKey(config)),
+    // Lista, e não uma conexão: duas lojas no mesmo balcão é caso real.
+    connections: conexoes.map((c) => ({
+      id: c.id,
+      apiBaseUrl: c.apiBaseUrl,
+      label: c.label || '',
+    })),
+    // Mantidos para a tela saber se há QUALQUER loja configurada sem precisar
+    // conhecer o formato da lista.
+    apiBaseUrl: conexoes[0]?.apiBaseUrl || '',
+    desktopApiKeyConfigured: conexoes.length > 0,
     printerName: config.printerName || '',
     autoPrint: config.autoPrint || 'true',
     autoStart: config.autoStart || 'true',
   }
 }
 
+/**
+ * Preferências da máquina — impressora, impressão automática, iniciar junto.
+ *
+ * NÃO mexe mais em conexão. Endereço e código passaram a ser lista, e tratá-los
+ * aqui misturaria "ajuste desta máquina" com "a quais lojas ela atende", que
+ * têm ciclos de vida diferentes: a impressora é do balcão, a loja é do negócio.
+ */
 function saveConfigInput(input: DesktopConfigInput) {
   const current = loadConfig()
   const next: Record<string, string> = {
     ...current,
-    apiBaseUrl: input.apiBaseUrl?.trim().replace(/\/+$/, '') || current.apiBaseUrl || '',
     printerName: input.printerName ?? current.printerName ?? '',
     autoPrint: input.autoPrint ?? current.autoPrint ?? 'true',
     autoStart: input.autoStart ?? current.autoStart ?? 'true',
   }
-
-  const suppliedToken = input.desktopApiKey?.trim()
-  if (suppliedToken) {
-    storeDesktopApiKey(next, suppliedToken)
-  } else if (next.desktopApiKey && safeStorage.isEncryptionAvailable()) {
-    // Upgrade a legacy plaintext token the next time the configuration is saved.
-    storeDesktopApiKey(next, next.desktopApiKey)
-  }
-
   saveConfig(next)
   return next
 }
 
-function getDesktopConnection() {
-  const config = loadConfig()
-  const apiBaseUrl = config.apiBaseUrl?.trim().replace(/\/+$/, '')
-  const desktopApiKey = readDesktopApiKey(config)
+/** Liga mais uma loja a este computador. */
+function adicionarConexao(apiBaseUrl: string, desktopApiKey: string): { erro?: string } {
+  const url = apiBaseUrl.trim().replace(/\/+$/, '')
+  const token = desktopApiKey.trim()
 
-  if (!apiBaseUrl || !desktopApiKey) return null
+  if (!url || !token) return { erro: 'Informe o endereço e o código da loja' }
+  if (!urlValida(url)) return { erro: 'Endereço inválido' }
 
-  try {
-    const parsed = new URL(apiBaseUrl)
-    if (!['http:', 'https:'].includes(parsed.protocol)) return null
-    return { apiBaseUrl, desktopApiKey }
-  } catch {
-    return null
+  const lista = readConnections()
+
+  // Mesmo código na mesma máquina seria a mesma loja duas vezes: pedidos
+  // duplicados na tela e som tocando em dobro.
+  const jaExiste = getConnections().some(
+    (c) => c.apiBaseUrl === url && c.desktopApiKey === token
+  )
+  if (jaExiste) return { erro: 'Esta loja já está ligada a este computador' }
+
+  const registro: ConnectionRecord = {
+    id: `loja-${Date.now().toString(36)}`,
+    apiBaseUrl: url,
   }
+  encodeKey(registro, token)
+  lista.push(registro)
+  writeConnections(lista)
+  return {}
 }
 
-async function desktopRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const connection = getDesktopConnection()
-  if (!connection) throw new Error('Configure a URL e o token de integração do servidor')
+function removerConexao(id: string) {
+  writeConnections(readConnections().filter((c) => c.id !== id))
+}
+
+function getDesktopConnection() {
+  return getConnection()
+}
+
+async function desktopRequest<T>(
+  path: string,
+  init: RequestInit = {},
+  connectionId?: string
+): Promise<T> {
+  const connection = getConnection(connectionId)
+  if (!connection) throw new Error('Configure a URL e o código da loja')
 
   const headers = new Headers(init.headers)
   headers.set('Authorization', `Bearer ${connection.desktopApiKey}`)
@@ -483,6 +618,15 @@ ${order.notes ? `<hr class="sep"><p class="bold">Obs:</p><p class="sm">${h(order
 // ── IPC Handlers ──────────────────────────────────────────────────────────
 ipcMain.handle('get-config', () => getConfigView())
 
+ipcMain.handle('add-connection', (_e, apiBaseUrl: string, desktopApiKey: string) => {
+  return adicionarConexao(apiBaseUrl, desktopApiKey)
+})
+
+ipcMain.handle('remove-connection', (_e, id: string) => {
+  removerConexao(id)
+  return { ok: true }
+})
+
 ipcMain.handle('save-config', (_e, input: DesktopConfigInput) => {
   const config = saveConfigInput(input)
   try {
@@ -519,22 +663,67 @@ ipcMain.handle('print-order', async (_e, order: Record<string, unknown>) => {
   }
 })
 
+/**
+ * Busca em TODAS as lojas ligadas e junta o resultado.
+ *
+ * Cada pedido sai daqui carregando de qual conexão veio. Sem isso, apertar
+ * "em preparo" num pedido da segunda loja mandaria a mudança para o servidor
+ * da primeira — que responderia "pedido não encontrado", ou pior, encontraria
+ * outro pedido com o mesmo id.
+ *
+ * `allSettled` e não `all`: uma loja fora do ar não pode esconder os pedidos da
+ * outra. A cozinha continua trabalhando com o que dá para ver.
+ */
+async function buscarEmTodasAsLojas(caminho: string): Promise<unknown[]> {
+  const conexoes = getConnections()
+  if (conexoes.length === 0) throw new Error('Configure a URL e o código da loja')
+
+  // A etiqueta só faz sentido com mais de uma loja: com uma, ela apareceria
+  // idêntica em todo cartão sem informar nada.
+  const etiquetar = conexoes.length > 1
+
+  const resultados = await Promise.allSettled(
+    conexoes.map(async (conexao) => {
+      const pedidos = await desktopRequest<Record<string, unknown>[]>(caminho, {}, conexao.id)
+      return pedidos.map((pedido) => ({
+        ...pedido,
+        connectionId: conexao.id,
+        storeLabel: etiquetar ? conexao.label || 'Loja' : '',
+      }))
+    })
+  )
+
+  const juntos: unknown[] = []
+  resultados.forEach((r, i) => {
+    if (r.status === 'fulfilled') juntos.push(...r.value)
+    else console.error(`Loja ${conexoes[i].label || conexoes[i].id} indisponível:`, r.reason)
+  })
+
+  // Ordena por chegada, misturando as lojas. Quem está no balcão reage ao
+  // pedido que chegou, não à loja de onde ele veio.
+  return juntos.sort((a, b) => {
+    const da = String((a as Record<string, unknown>).created_at ?? '')
+    const db = String((b as Record<string, unknown>).created_at ?? '')
+    return db.localeCompare(da)
+  })
+}
+
 ipcMain.handle('fetch-orders', async () => {
-  return desktopRequest<unknown[]>('/api/desktop/orders')
+  return buscarEmTodasAsLojas('/api/desktop/orders')
 })
 
 ipcMain.handle('fetch-order-history', async (_e, opts: { limit: number; offset: number; status?: string }) => {
   const params = new URLSearchParams({ history: 'true', limit: String(opts.limit), offset: String(opts.offset) })
   if (opts.status) params.set('status', opts.status)
-  return desktopRequest<unknown[]>(`/api/desktop/orders?${params.toString()}`)
+  return buscarEmTodasAsLojas(`/api/desktop/orders?${params.toString()}`)
 })
 
-ipcMain.handle('update-order-status', async (_e, orderId: string, status: string) => {
+ipcMain.handle('update-order-status', async (_e, orderId: string, status: string, connectionId?: string) => {
   try {
     await desktopRequest(`/api/desktop/orders/${encodeURIComponent(orderId)}`, {
       method: 'PATCH',
       body: JSON.stringify({ status }),
-    })
+    }, connectionId)
     return true
   } catch (error) {
     console.error('Erro ao atualizar pedido:', error)
@@ -542,11 +731,11 @@ ipcMain.handle('update-order-status', async (_e, orderId: string, status: string
   }
 })
 
-ipcMain.handle('acknowledge-order', async (_e, orderId: string) => {
+ipcMain.handle('acknowledge-order', async (_e, orderId: string, connectionId?: string) => {
   try {
     await desktopRequest(`/api/desktop/orders/${encodeURIComponent(orderId)}/acknowledge`, {
       method: 'POST',
-    })
+    }, connectionId)
     return true
   } catch (error) {
     console.error('Erro ao reconhecer pedido:', error)
@@ -555,16 +744,40 @@ ipcMain.handle('acknowledge-order', async (_e, orderId: string) => {
 })
 
 // ── WhatsApp (chat com clientes, espelha o painel do admin na web) ─────────
-ipcMain.handle('get-store', async () => {
-  // Qual loja este computador atende. O cabeçalho mostrava marca chumbada, o
-  // que numa plataforma faz o dono de uma loja ler o nome de outra.
-  try {
-    return await desktopRequest('/api/desktop/loja')
-  } catch {
-    // Sem servidor configurado ainda, ou fora do ar: o cabeçalho cai na marca
-    // da plataforma em vez de deixar a janela sem identidade.
-    return { storeName: null }
-  }
+/**
+ * Quais lojas este computador atende.
+ *
+ * Pergunta a cada servidor quem ele é e GUARDA o nome na conexão. O nome vem do
+ * servidor, e não do que o lojista digitou, porque é ele que aparece na
+ * etiqueta de cada pedido — um apelido local divergiria do painel e faria a
+ * cozinha duvidar de qual loja é qual.
+ */
+ipcMain.handle('get-stores', async () => {
+  const conexoes = getConnections()
+
+  const nomes = await Promise.allSettled(
+    conexoes.map((c) => desktopRequest<{ storeName: string | null }>('/api/desktop/loja', {}, c.id))
+  )
+
+  const registros = readConnections()
+  const resultado = conexoes.map((c, i) => {
+    const r = nomes[i]
+    const nome = r.status === 'fulfilled' ? r.value.storeName : null
+    if (nome) {
+      const registro = registros.find((x) => x.id === c.id)
+      if (registro) registro.label = nome
+    }
+    return {
+      id: c.id,
+      // Servidor fora do ar mantém o último nome conhecido: apagar a etiqueta
+      // deixaria os pedidos daquela loja sem identificação na tela.
+      storeName: nome ?? c.label ?? null,
+      online: r.status === 'fulfilled',
+    }
+  })
+
+  if (registros.length > 0) writeConnections(registros)
+  return resultado
 })
 
 ipcMain.handle('get-whatsapp-status', async () => {

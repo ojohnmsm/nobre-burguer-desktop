@@ -7,13 +7,15 @@ contextBridge.exposeInMainWorld('api', {
   printOrder:        (order: unknown)                  => ipcRenderer.invoke('print-order', order),
   fetchOrders:       ()                                => ipcRenderer.invoke('fetch-orders'),
   fetchOrderHistory: (opts: unknown)                   => ipcRenderer.invoke('fetch-order-history', opts),
-  updateOrderStatus: (id: string, status: string)     => ipcRenderer.invoke('update-order-status', id, status),
-  acknowledgeOrder:  (id: string)                      => ipcRenderer.invoke('acknowledge-order', id),
+  updateOrderStatus: (id: string, status: string, connectionId?: string) => ipcRenderer.invoke('update-order-status', id, status, connectionId),
+  acknowledgeOrder:  (id: string, connectionId?: string) => ipcRenderer.invoke('acknowledge-order', id, connectionId),
   onPrintError:      (cb: (err: string) => void) => {
     ipcRenderer.on('print-error', (_e, err) => cb(err))
     return () => ipcRenderer.removeAllListeners('print-error')
   },
-  getStore:            ()                                          => ipcRenderer.invoke('get-store'),
+  getStores:           ()                                          => ipcRenderer.invoke('get-stores'),
+  addConnection:       (url: string, token: string)                 => ipcRenderer.invoke('add-connection', url, token),
+  removeConnection:    (id: string)                                 => ipcRenderer.invoke('remove-connection', id),
   getWhatsappStatus:   ()                                          => ipcRenderer.invoke('get-whatsapp-status'),
   getWhatsappMessages: (conversationId: string)                   => ipcRenderer.invoke('get-whatsapp-messages', conversationId),
   sendWhatsappReply:   (conversationId: string, message: string) => ipcRenderer.invoke('send-whatsapp-reply', conversationId, message),

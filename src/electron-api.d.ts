@@ -1,6 +1,7 @@
 import type { Order, OrderStatus } from './types'
 
 export interface DesktopConfig {
+  connections: { id: string; apiBaseUrl: string; label: string }[]
   apiBaseUrl: string
   desktopApiKeyConfigured: boolean
   printerName: string
@@ -14,8 +15,6 @@ export interface NotificationSoundsResponse {
 }
 
 export interface DesktopConfigInput {
-  apiBaseUrl?: string
-  desktopApiKey?: string
   printerName?: string
   autoPrint?: string
   autoStart?: string
@@ -77,10 +76,12 @@ declare global {
       printOrder: (order: Order) => Promise<'ok' | 'no-printer' | 'error'>
       fetchOrders: () => Promise<Order[]>
       fetchOrderHistory: (opts: { limit: number; offset: number; status?: OrderStatus | '' }) => Promise<Order[]>
-      updateOrderStatus: (id: string, status: OrderStatus) => Promise<boolean>
-      acknowledgeOrder: (id: string) => Promise<boolean>
+      updateOrderStatus: (id: string, status: OrderStatus, connectionId?: string) => Promise<boolean>
+      acknowledgeOrder: (id: string, connectionId?: string) => Promise<boolean>
       onPrintError: (callback: (error: string) => void) => () => void
-      getStore: () => Promise<{ storeName: string | null }>
+      getStores: () => Promise<{ id: string; storeName: string | null; online: boolean }[]>
+      addConnection: (url: string, token: string) => Promise<{ erro?: string }>
+      removeConnection: (id: string) => Promise<{ ok: boolean }>
       getWhatsappStatus: () => Promise<WhatsappStatusResponse>
       getWhatsappMessages: (conversationId: string) => Promise<WhatsappMessagesResponse>
       sendWhatsappReply: (conversationId: string, message: string) => Promise<boolean>
