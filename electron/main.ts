@@ -5,10 +5,14 @@ import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs'
 import { exec } from 'child_process'
 import { randomUUID } from 'crypto'
 
-// ── Atualização automática (electron-updater, provider "generic") ─────────
-// Nunca baixa nem instala sem perguntar — só confere e avisa. O arquivo
-// latest.yml + o instalador ficam no bucket 'desktop-updates' do Supabase
-// Storage (scripts/publish-desktop-update.mjs sobe eles a cada release).
+// ── Atualização automática ────────────────────────────────────────────────
+// O instalador e o latest.yml ficam nas releases do GitHub, conforme
+// `build.publish` no package.json. O comentário anterior falava de um bucket do
+// Supabase e de um script que não existem mais — descrição de um jeito antigo
+// de publicar, mantida por descuido.
+//
+// Nunca baixa nem instala sem perguntar: quem está no balcão pode estar no meio
+// do movimento, e reiniciar o programa sozinho perderia a tela de pedidos.
 autoUpdater.autoDownload = false
 autoUpdater.autoInstallOnAppQuit = false
 
