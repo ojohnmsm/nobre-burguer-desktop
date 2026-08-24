@@ -21,12 +21,20 @@ de download do painel quebraria por não achar `.exe`.
 
    O arquivo está no `.gitignore` e não vai para o repositório.
 
-4. Publique:
+4. Publique. Dois comandos, um de cada vez:
 
    ```
    npm install
+   ```
+
+   ```
    npm run release
    ```
+
+   No PowerShell do Windows não junte os dois com `&&` — ele só aceita esse
+   operador a partir da versão 7, e a que vem no Windows é a 5. Também não use
+   `;` no lugar: ele roda o segundo comando mesmo se o primeiro falhar, e você
+   publicaria com as dependências pela metade.
 
 ## O que conferir depois
 
