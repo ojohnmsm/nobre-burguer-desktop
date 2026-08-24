@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('print-error', (_e, err) => cb(err))
     return () => ipcRenderer.removeAllListeners('print-error')
   },
+  getStore:            ()                                          => ipcRenderer.invoke('get-store'),
   getWhatsappStatus:   ()                                          => ipcRenderer.invoke('get-whatsapp-status'),
   getWhatsappMessages: (conversationId: string)                   => ipcRenderer.invoke('get-whatsapp-messages', conversationId),
   sendWhatsappReply:   (conversationId: string, message: string) => ipcRenderer.invoke('send-whatsapp-reply', conversationId, message),

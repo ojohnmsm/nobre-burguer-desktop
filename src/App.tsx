@@ -3,6 +3,7 @@ import { History, LayoutGrid, MessageCircle, Printer, RefreshCw, Settings as Set
 import { OrderCard } from './components/OrderCard'
 import { Settings } from './components/Settings'
 import { WhatsappPanel } from './components/WhatsappPanel'
+import { CapivaraMark } from './components/CapivaraMark'
 import { KANBAN_COLUMNS, STATUS_LABELS, type Order, type OrderStatus } from './types'
 import type { WhatsappStatusConversation } from './electron-api'
 import { loadNotificationSounds, playMessageAlert, playOrderAlert } from './notification-sound'
@@ -15,6 +16,7 @@ const HISTORY_PAGE_SIZE = 30
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('kanban')
+  const [storeName, setStoreName] = useState<string | null>(null)
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [autoPrint, setAutoPrint] = useState(true)
@@ -87,6 +89,17 @@ export default function App() {
     setConfigured(ready)
     setAutoPrint(config.autoPrint !== 'false')
     autoPrintRef.current = config.autoPrint !== 'false'
+
+    // O nome da loja vem junto: sem servidor configurado não há a quem
+    // perguntar, e com ele configurado a resposta muda se o código for trocado
+    // por outro de outra loja.
+    if (ready) {
+      const loja = await window.api.getStore().catch(() => ({ storeName: null }))
+      setStoreName(loja.storeName)
+    } else {
+      setStoreName(null)
+    }
+
     return ready
   }, [])
 
@@ -278,7 +291,10 @@ export default function App() {
         className="flex items-center gap-3 px-4 py-2.5 bg-[#141414] border-b border-[#222] flex-shrink-0"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        <span className="text-amber-400 font-bold text-sm">🍔 Nobre Burguer</span>
+        <span className="flex items-center gap-1.5 text-amber-400 font-bold text-sm">
+          <CapivaraMark size={16} />
+          {storeName ?? 'Cardapia'}
+        </span>
         <div className="flex-1" />
 
         {notifications.length > 0 && (
