@@ -250,12 +250,22 @@ function saveConfigInput(input: DesktopConfigInput) {
   return next
 }
 
+/**
+ * Onde a Cardapia mora.
+ *
+ * O código da loja já identifica a loja E o servidor que a hospeda — pedir o
+ * endereço junto era expor detalhe de infraestrutura a quem só quer ligar o
+ * balcão. O campo continua existindo para quem roda em domínio próprio ou numa
+ * instalação separada, mas em branco resolve para cá.
+ */
+const SERVIDOR_PADRAO = 'https://www.cardapia.shop'
+
 /** Liga mais uma loja a este computador. */
 function adicionarConexao(apiBaseUrl: string, desktopApiKey: string): { erro?: string } {
-  const url = apiBaseUrl.trim().replace(/\/+$/, '')
+  const url = apiBaseUrl.trim().replace(/\/+$/, '') || SERVIDOR_PADRAO
   const token = desktopApiKey.trim()
 
-  if (!url || !token) return { erro: 'Informe o endereço e o código da loja' }
+  if (!token) return { erro: 'Informe o código da loja' }
   if (!urlValida(url)) return { erro: 'Endereço inválido' }
 
   const lista = readConnections()

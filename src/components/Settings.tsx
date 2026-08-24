@@ -24,6 +24,7 @@ export function Settings({ onSaved }: Props) {
   const [error, setError] = useState('')
   const [showToken, setShowToken] = useState(false)
   const [novaUrl, setNovaUrl] = useState('')
+  const [mostrarAvancado, setMostrarAvancado] = useState(false)
 
   useEffect(() => {
     window.api.getConfig().then(setConfig).catch(() => setError('Não foi possível ler as configurações'))
@@ -137,14 +138,6 @@ export function Settings({ onSaved }: Props) {
         <div className="border-t border-[#2a2a2a] pt-3 space-y-2">
           <p className="text-xs text-gray-400 font-medium">Ligar outra loja</p>
 
-          <input
-            type="url"
-            placeholder="https://cardapia.shop"
-            value={novaUrl}
-            onChange={event => setNovaUrl(event.target.value)}
-            className="w-full bg-[#1a1a1a] border border-[#333] rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-amber-500"
-          />
-
           <div className="relative">
             <input
               type={showToken ? 'text' : 'password'}
@@ -163,10 +156,31 @@ export function Settings({ onSaved }: Props) {
             </button>
           </div>
 
+          {/* O endereço fica escondido porque o código já diz qual servidor
+              procurar. Só quem roda em instalação própria precisa dele, e essa
+              pessoa sabe que precisa. */}
+          <button
+            type="button"
+            onClick={() => setMostrarAvancado(v => !v)}
+            className="text-[11px] text-gray-500 hover:text-gray-300 underline"
+          >
+            {mostrarAvancado ? 'Esconder' : 'Uso meu próprio servidor'}
+          </button>
+
+          {mostrarAvancado && (
+            <input
+              type="url"
+              placeholder="https://www.cardapia.shop"
+              value={novaUrl}
+              onChange={event => setNovaUrl(event.target.value)}
+              className="w-full bg-[#1a1a1a] border border-[#333] rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-amber-500"
+            />
+          )}
+
           <button
             type="button"
             onClick={adicionarLoja}
-            disabled={!novaUrl.trim() || !desktopApiKey.trim()}
+            disabled={!desktopApiKey.trim()}
             className="w-full bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-black font-semibold rounded-xl py-2.5 text-sm transition-colors"
           >
             Ligar loja
@@ -174,8 +188,8 @@ export function Settings({ onSaved }: Props) {
 
           <p className="text-[11px] text-gray-600 flex gap-1.5">
             <KeyRound size={12} className="mt-px flex-shrink-0" />
-            Cada loja tem o próprio código, gerado em Integrações no painel dela.
-            Duas lojas no mesmo computador recebem pedidos lado a lado.
+            Cole o código gerado em Integrações, no painel da loja. Duas lojas no
+            mesmo computador recebem pedidos lado a lado.
           </p>
         </div>
       </section>
