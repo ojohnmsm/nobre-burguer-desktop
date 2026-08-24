@@ -16,7 +16,7 @@ const HISTORY_PAGE_SIZE = 30
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('kanban')
-  const [storeName, setStoreName] = useState<string | null>(null)
+  const [stores, setStores] = useState<{ id: string; storeName: string | null; online: boolean }[]>([])
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [autoPrint, setAutoPrint] = useState(true)
@@ -44,7 +44,7 @@ export default function App() {
         ? { ...order, acknowledged_at: new Date().toISOString() }
         : order
     ))
-    void window.api.acknowledgeOrder(orderId)
+    void window.api.acknowledgeOrder(orderId, orders.find(o => o.id === orderId)?.connectionId)
   }
 
   const addNotification = useCallback((message: string) => {
@@ -85,19 +85,20 @@ export default function App() {
 
   const readConfig = useCallback(async () => {
     const config = await window.api.getConfig()
-    const ready = Boolean(config.apiBaseUrl && config.desktopApiKeyConfigured)
+    // Pergunta à lista, não aos campos de compatibilidade: é a lista que
+    // manda desde que o computador pode atender mais de uma loja.
+    const ready = config.connections.length > 0
     setConfigured(ready)
     setAutoPrint(config.autoPrint !== 'false')
     autoPrintRef.current = config.autoPrint !== 'false'
 
-    // O nome da loja vem junto: sem servidor configurado não há a quem
-    // perguntar, e com ele configurado a resposta muda se o código for trocado
-    // por outro de outra loja.
+    // Os nomes das lojas vêm junto: sem servidor configurado não há a quem
+    // perguntar, e com ele configurado a resposta muda se o código for trocado.
     if (ready) {
-      const loja = await window.api.getStore().catch(() => ({ storeName: null }))
-      setStoreName(loja.storeName)
+      const lista = await window.api.getStores().catch(() => [])
+      setStores(lista)
     } else {
-      setStoreName(null)
+      setStores([])
     }
 
     return ready
@@ -253,7 +254,11 @@ export default function App() {
   }
 
   async function updateStatus(id: string, status: OrderStatus) {
-    const updated = await window.api.updateOrderStatus(id, status)
+    // A conexão de origem viaja junto com o pedido. Sem ela, mudar o status de
+    // um pedido da segunda loja iria para o servidor da primeira — que
+    // responderia "não encontrado", ou acertaria outro pedido por acaso.
+    const alvo = orders.find(o => o.id === id)
+    const updated = await window.api.updateOrderStatus(id, status, alvo?.connectionId)
     if (updated) {
       setOrders(previous => previous.map(order => order.id === id ? { ...order, status } : order))
     } else {
@@ -293,8 +298,25 @@ export default function App() {
       >
         <span className="flex items-center gap-1.5 text-amber-400 font-bold text-sm">
           <CapivaraMark size={16} />
-          {storeName ?? 'Cardapia'}
+          {/* Com duas lojas, o nome de uma delas no cabeçalho seria mentira —
+              a etiqueta de cada pedido é que diz de quem ele é. */}
+          {stores.length === 1
+            ? stores[0].storeName ?? 'Cardapia'
+            : stores.length > 1
+              ? `${stores.length} lojas`
+              : 'Cardapia'}
         </span>
+
+        {/* Loja fora do ar precisa aparecer: sem isso, a cozinha acha que
+            simplesmente não chegou pedido daquela loja. */}
+        {stores.filter((l) => !l.online).map((l) => (
+          <span
+            key={l.id}
+            className="text-[11px] rounded-full border border-red-500/30 bg-red-500/10 text-red-300 px-2 py-0.5"
+          >
+            {l.storeName ?? 'Loja'} sem conexão
+          </span>
+        ))}
         <div className="flex-1" />
 
         {notifications.length > 0 && (

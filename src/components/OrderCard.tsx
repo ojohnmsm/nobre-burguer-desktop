@@ -61,6 +61,18 @@ export function OrderCard({ order, onStatus, onPrint, onOpen, compact = false }:
             <span className={`text-[10px] px-1.5 py-0.5 rounded border ${STATUS_COLORS[order.status]}`}>
               {STATUS_LABELS[order.status]}
             </span>
+            {/* A etiqueta da loja só aparece quando o computador atende mais de
+                uma — com uma só, ela repetiria em todo cartão sem informar
+                nada. A cor vem do nome, então cada loja recebe sempre a mesma
+                e a cozinha aprende a reconhecer sem ler. */}
+            {order.storeLabel && (
+              <span
+                className="text-[10px] px-1.5 py-0.5 rounded font-semibold"
+                style={corDaLoja(order.storeLabel)}
+              >
+                {order.storeLabel}
+              </span>
+            )}
             {isPickup && (
               <span className="text-[10px] px-2 py-0.5 bg-amber-400 text-black font-black tracking-wide shadow-[0_0_0_1px_rgba(251,191,36,.45)]">
                 RETIRADA
@@ -173,4 +185,20 @@ export function OrderCard({ order, onStatus, onPrint, onOpen, compact = false }:
       )}
     </div>
   )
+}
+
+/**
+ * Cor estável a partir do nome da loja.
+ *
+ * Derivada do texto e não sorteada: a mesma loja precisa ter a mesma cor toda
+ * vez que o aplicativo abre, senão a etiqueta vira decoração em vez de pista.
+ */
+function corDaLoja(nome: string): React.CSSProperties {
+  let soma = 0
+  for (const ch of nome) soma = (soma * 31 + ch.charCodeAt(0)) % 360
+  return {
+    backgroundColor: `hsl(${soma} 70% 22%)`,
+    color: `hsl(${soma} 85% 78%)`,
+    boxShadow: `0 0 0 1px hsl(${soma} 60% 35%)`,
+  }
 }
