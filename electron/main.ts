@@ -44,13 +44,46 @@ autoUpdater.on('update-downloaded', (info) => {
   })
 })
 
-autoUpdater.on('error', (error) => {
-  console.error('Erro ao verificar atualização:', error)
+/**
+ * Distingue a checagem automática (silenciosa quando não há novidade) da
+ * pedida na hora pelo menu (que precisa responder algo sempre, ou vira um
+ * botão que parece não fazer nada).
+ *
+ * Motivo de existir: fechar a janela não encerra o programa — ele esconde para
+ * a bandeja — e a checagem automática só roda 5s depois do PROCESSO nascer e
+ * depois a cada 4h. Um Cardapia aberto desde antes de uma versão nova existir
+ * fica sem saber disso até alguém sair de verdade (bandeja → Sair) e reabrir,
+ * ou até a próxima janela de 4h. Sem um jeito manual de perguntar agora, não dá
+ * como confirmar se a atualização está de fato funcionando.
+ */
+let verificacaoManual = false
+
+autoUpdater.on('update-not-available', () => {
+  if (!verificacaoManual || !mainWindow) return
+  verificacaoManual = false
+  void dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Sem atualização',
+    message: 'Você já está na versão mais recente.',
+  })
 })
 
-function checkForUpdates() {
+autoUpdater.on('error', (error) => {
+  console.error('Erro ao verificar atualização:', error)
+  if (!verificacaoManual || !mainWindow) return
+  verificacaoManual = false
+  void dialog.showMessageBox(mainWindow, {
+    type: 'error',
+    title: 'Não foi possível verificar',
+    message: 'Confira a conexão com a internet e tente de novo.',
+  })
+})
+
+function checkForUpdates(manual = false) {
+  if (manual) verificacaoManual = true
   autoUpdater.checkForUpdates().catch((error) => {
     console.error('Erro ao checar atualização:', error)
+    if (manual) verificacaoManual = false
   })
 }
 
@@ -857,6 +890,7 @@ app.whenReady().then(() => {
   tray.setToolTip('Cardapia')
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Abrir', click: () => mainWindow?.show() },
+    { label: 'Verificar atualização', click: () => checkForUpdates(true) },
     { type: 'separator' },
     { label: 'Sair', click: () => { isQuitting = true; app.quit() } },
   ]))
