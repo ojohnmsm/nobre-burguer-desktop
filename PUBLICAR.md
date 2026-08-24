@@ -11,10 +11,18 @@ git push origin v1.1.2
 Acompanhe em **Actions**. Ao final, a release aparece em Releases com o `.exe`,
 o `.blockmap` e o `latest.yml`.
 
-O passo final do fluxo CONFERE se o `.exe` e o `latest.yml` subiram, e falha se
-faltar algum. Sem o `latest.yml` o electron-updater não enxerga a versão nova —
+O passo final do fluxo CONFERE três coisas: que existe **uma só** release para
+a tag, que o `.exe` subiu e que o `latest.yml` subiu. Falha se qualquer uma
+faltar. Sem o `latest.yml` o electron-updater não enxerga a versão nova —
 a release parece publicada e não atualiza ninguém. É uma falha silenciosa, e por
 isso vale um teste explícito.
+
+## Se aparecerem duas releases com a mesma tag
+
+Não deve mais acontecer — a release passou a ser criada antes da construção,
+justamente para não haver o que disputar. Se acontecer, apague as duas e empurre
+a tag de novo: com os arquivos divididos entre elas, o atualizador lê a que o
+GitHub escolher, e pode ser a que não tem o `latest.yml`.
 
 ## Por que não publicar da própria máquina
 
