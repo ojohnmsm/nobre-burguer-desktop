@@ -43,3 +43,14 @@ O `appId` mudou de `com.nobreburguer.desktop` para `shop.cardapia.desktop`.
 Para o sistema operacional isso é **outro programa**: quem tem o "Nobre Burguer"
 instalado não recebe esta atualização sozinho. Precisa desinstalar o antigo e
 instalar o Cardapia — uma vez só, e nunca mais.
+
+## Se o aplicativo sair com o ícone do Electron
+
+Confira `build.win` no `package.json`. Com `signAndEditExecutable: false` o
+electron-builder pula a **edição de recursos do executável**, e é aí que o ícone
+e os metadados são gravados — o resultado é o átomo padrão do Electron mesmo
+com `build/icon.png` no lugar certo.
+
+O correto para pular só a assinatura digital é `signExecutable: false`. A
+própria saída da construção avisa isso, na linha que começa com
+"executable resource editing and code signing skipped".
