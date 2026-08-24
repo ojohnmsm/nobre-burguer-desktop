@@ -1,64 +1,43 @@
 # Publicar uma versão
 
-O instalador é do Windows, e o `.exe` só pode ser gerado **numa máquina
-Windows**. O servidor onde o resto do sistema roda é Linux e não tem wine —
-publicar de lá produziria `AppImage` e `snap`, sem instalador nenhum, e o botão
-de download do painel quebraria por não achar `.exe`.
+A publicação é automática: empurrar uma tag `v*` faz o GitHub construir o
+instalador do Windows e anexá-lo à release.
 
-## Passos
+```
+git tag v1.1.2
+git push origin v1.1.2
+```
 
-1. Puxe a branch com as mudanças e faça o merge em `main`.
+Acompanhe em **Actions**. Ao final, a release aparece em Releases com o `.exe`,
+o `.blockmap` e o `latest.yml`.
 
-2. Confirme a versão em `package.json`. Ela precisa ser **maior** que a
-   publicada, senão o electron-builder recusa — hoje está em `1.1.0`.
+O passo final do fluxo CONFERE se o `.exe` e o `latest.yml` subiram, e falha se
+faltar algum. Sem o `latest.yml` o electron-updater não enxerga a versão nova —
+a release parece publicada e não atualiza ninguém. É uma falha silenciosa, e por
+isso vale um teste explícito.
 
-3. Crie um arquivo `.env.local` na raiz deste repositório com o token do
-   GitHub que tem permissão de publicar release:
+## Por que não publicar da própria máquina
 
-   ```
-   GH_TOKEN=...
-   ```
+O `npm run release` continua funcionando e é útil para experimentar. Mas subir
+95 MB por conexão doméstica falhou em duas das três primeiras tentativas, cada
+vez deixando um arquivo diferente para trás. Na nuvem, quem constrói e quem
+hospeda são a mesma infraestrutura.
 
-   O arquivo está no `.gitignore` e não vai para o repositório.
+## Antes de marcar a versão
 
-4. Publique. Dois comandos, um de cada vez:
+A versão em `package.json` precisa ser **maior** que a publicada, e a tag deve
+corresponder a ela.
 
-   ```
-   npm install
-   ```
+## Atenção ao appId
 
-   ```
-   npm run release
-   ```
-
-   No PowerShell do Windows não junte os dois com `&&` — ele só aceita esse
-   operador a partir da versão 7, e a que vem no Windows é a 5. Também não use
-   `;` no lugar: ele roda o segundo comando mesmo se o primeiro falhar, e você
-   publicaria com as dependências pela metade.
-
-## O que conferir depois
-
-A versão nova em `releases/latest` precisa ter:
-
-- `Cardapia-Setup-1.1.0.exe` — é o que o botão de download entrega
-- `latest.yml` — é o que a atualização automática lê
-
-Se sair `Cardapia-1.1.0.AppImage` em vez do `.exe`, a construção rodou em Linux.
-
-## Atenção nesta versão
-
-O `appId` mudou de `com.nobreburguer.desktop` para `shop.cardapia.desktop`.
-Para o sistema operacional isso é **outro programa**: quem tem o "Nobre Burguer"
-instalado não recebe esta atualização sozinho. Precisa desinstalar o antigo e
-instalar o Cardapia — uma vez só, e nunca mais.
+O `appId` mudou de `com.nobreburguer.desktop` para `shop.cardapia.desktop` na
+1.1.0. Para o sistema operacional isso é outro programa: quem tinha o
+"Nobre Burguer" instalado precisou desinstalar e instalar o Cardapia. De 1.1.0
+em diante a atualização é automática.
 
 ## Se o aplicativo sair com o ícone do Electron
 
 Confira `build.win` no `package.json`. Com `signAndEditExecutable: false` o
 electron-builder pula a **edição de recursos do executável**, e é aí que o ícone
-e os metadados são gravados — o resultado é o átomo padrão do Electron mesmo
-com `build/icon.png` no lugar certo.
-
-O correto para pular só a assinatura digital é `signExecutable: false`. A
-própria saída da construção avisa isso, na linha que começa com
-"executable resource editing and code signing skipped".
+e os metadados são gravados. O correto para pular só a assinatura digital é
+`signExecutable: false`.

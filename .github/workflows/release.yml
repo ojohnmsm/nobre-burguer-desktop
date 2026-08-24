@@ -1,0 +1,63 @@
+# Constrói e publica o instalador quando uma tag de versão é empurrada.
+#
+# POR QUE ISTO EXISTE
+#
+# Publicar da máquina de casa significa subir 95 MB por uma conexão doméstica,
+# e três das três primeiras tentativas ficaram pela metade: uma só com o
+# blockmap, outra sem o latest.yml. Sem o latest.yml o electron-updater não
+# enxerga a versão nova, então a correção não chega a lojista nenhum — e o
+# sintoma é silêncio, que é o pior tipo de falha.
+#
+# Aqui a máquina que constrói é a mesma nuvem que hospeda a release: o envio é
+# interno e não depende de ninguém estar com o computador ligado.
+name: Publicar versão
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  windows:
+    # windows-latest e não ubuntu: o instalador é .nsis e precisa de Windows de
+    # verdade. Em Linux sairia AppImage, e o botão de download do painel, que
+    # procura .exe, não acharia nada.
+    runs-on: windows-latest
+
+    permissions:
+      # Necessária para criar a release e anexar os arquivos.
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Conferir tipos
+        run: npm run typecheck
+
+      - name: Construir e publicar
+        env:
+          # Fornecido pelo próprio GitHub. Não é preciso criar segredo nenhum.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npx electron-vite build
+          npx electron-builder --publish always
+
+      - name: Conferir o que subiu
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Uma release sem latest.yml parece publicada e não atualiza ninguém.
+          # Falhar aqui é melhor que descobrir semanas depois, pelo silêncio.
+          arquivos=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')
+          echo "$arquivos"
+          echo "$arquivos" | grep -q '\.exe$'      || { echo "::error::instalador .exe não subiu"; exit 1; }
+          echo "$arquivos" | grep -q 'latest\.yml' || { echo "::error::latest.yml não subiu — ninguém receberia esta atualização"; exit 1; }
