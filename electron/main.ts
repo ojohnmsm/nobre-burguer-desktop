@@ -17,7 +17,7 @@ autoUpdater.on('update-available', (info) => {
   void dialog.showMessageBox(mainWindow, {
     type: 'info',
     title: 'Atualização disponível',
-    message: `Uma nova versão (${info.version}) do Nobre Burguer está disponível.`,
+    message: `Uma nova versão (${info.version}) do Cardapia está disponível.`,
     detail: 'Deseja baixar e instalar agora? Isso reinicia o app.',
     buttons: ['Atualizar agora', 'Mais tarde'],
     defaultId: 0,
@@ -555,6 +555,18 @@ ipcMain.handle('acknowledge-order', async (_e, orderId: string) => {
 })
 
 // ── WhatsApp (chat com clientes, espelha o painel do admin na web) ─────────
+ipcMain.handle('get-store', async () => {
+  // Qual loja este computador atende. O cabeçalho mostrava marca chumbada, o
+  // que numa plataforma faz o dono de uma loja ler o nome de outra.
+  try {
+    return await desktopRequest('/api/desktop/loja')
+  } catch {
+    // Sem servidor configurado ainda, ou fora do ar: o cabeçalho cai na marca
+    // da plataforma em vez de deixar a janela sem identidade.
+    return { storeName: null }
+  }
+})
+
 ipcMain.handle('get-whatsapp-status', async () => {
   return desktopRequest('/api/desktop/whatsapp/status')
 })
@@ -592,7 +604,7 @@ app.whenReady().then(() => {
     height: 700,
     minWidth: 800,
     minHeight: 500,
-    title: 'Nobre Burguer — Pedidos',
+    title: 'Cardapia — Pedidos',
     webPreferences: {
       preload: join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
@@ -615,7 +627,7 @@ app.whenReady().then(() => {
     </svg>
   `)}`)
   tray = new Tray(icon)
-  tray.setToolTip('Nobre Burguer')
+  tray.setToolTip('Cardapia')
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Abrir', click: () => mainWindow?.show() },
     { type: 'separator' },

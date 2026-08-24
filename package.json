@@ -1,7 +1,7 @@
 {
-  "name": "nobre-burguer-desktop",
+  "name": "cardapia-desktop",
   "version": "1.0.0",
-  "description": "Nobre Burguer — Gerenciador de Pedidos",
+  "description": "Cardapia — Gerenciador de Pedidos",
   "main": "dist-electron/main/main.js",
   "engines": {
     "node": ">=22.12.0"
@@ -33,8 +33,8 @@
     "vite": "^6.0.7"
   },
   "build": {
-    "appId": "com.nobreburguer.desktop",
-    "productName": "Nobre Burguer",
+    "appId": "shop.cardapia.desktop",
+    "productName": "Cardapia",
     "directories": {
       "output": "release"
     },
@@ -46,7 +46,7 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "shortcutName": "Nobre Burguer"
+      "shortcutName": "Cardapia"
     },
     "files": [
       "dist/**/*",

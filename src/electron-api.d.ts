@@ -80,6 +80,7 @@ declare global {
       updateOrderStatus: (id: string, status: OrderStatus) => Promise<boolean>
       acknowledgeOrder: (id: string) => Promise<boolean>
       onPrintError: (callback: (error: string) => void) => () => void
+      getStore: () => Promise<{ storeName: string | null }>
       getWhatsappStatus: () => Promise<WhatsappStatusResponse>
       getWhatsappMessages: (conversationId: string) => Promise<WhatsappMessagesResponse>
       sendWhatsappReply: (conversationId: string, message: string) => Promise<boolean>
