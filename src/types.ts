@@ -72,7 +72,9 @@ export const PAYMENT_LABELS: Record<string, string> = {
 }
 
 export const KANBAN_COLUMNS: { id: string; label: string; statuses: OrderStatus[]; accent: string }[] = [
-  { id: 'new',      label: 'Novos',      statuses: ['pending','awaiting_payment','paid'], accent: '#f59e0b' },
+  // Online pendente não chega ao PDV: o servidor só o libera após o Mercado
+  // Pago aprovar. Mantemos o tipo para que pedidos antigos sigam legíveis no histórico.
+  { id: 'new',      label: 'Novos',      statuses: ['pending','paid'], accent: '#f59e0b' },
   { id: 'prep',     label: 'Em preparo', statuses: ['preparing'],                         accent: '#3b82f6' },
   { id: 'delivery', label: 'Na entrega', statuses: ['out_for_delivery'],                  accent: '#a855f7' },
   { id: 'done',     label: 'Concluído',  statuses: ['delivered','cancelled'],              accent: '#6b7280' },
