@@ -7,13 +7,13 @@ const ALL_STATUSES: OrderStatus[] = [
 ]
 
 const STATUS_COLORS: Record<OrderStatus, string> = {
-  pending:          'text-gray-400 border-gray-600',
-  awaiting_payment: 'text-amber-400 border-amber-700',
-  paid:             'text-green-400 border-green-700',
-  preparing:        'text-blue-400 border-blue-700',
-  out_for_delivery: 'text-purple-400 border-purple-700',
-  delivered:        'text-gray-500 border-gray-700',
-  cancelled:        'text-red-400 border-red-700',
+  pending:          'text-[var(--text-muted)] border-[var(--border)]',
+  awaiting_payment: 'text-[var(--primary)] border-amber-300',
+  paid:             'text-[var(--success)] border-green-300',
+  preparing:        'text-blue-700 border-blue-300',
+  out_for_delivery: 'text-purple-700 border-purple-300',
+  delivered:        'text-[var(--text-xmuted)] border-[var(--border)]',
+  cancelled:        'text-[var(--danger)] border-red-300',
 }
 
 // Next logical status transitions (fast buttons)
@@ -43,10 +43,10 @@ export function OrderCard({ order, onStatus, onPrint, onOpen, compact = false }:
   const viaWhatsapp = order.channel === 'whatsapp'
 
   return (
-    <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl overflow-hidden select-none">
+    <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl overflow-hidden select-none shadow-[var(--shadow-sm)]">
       {/* Card header */}
       <button
-        className="w-full p-3 flex items-start gap-2 text-left hover:bg-[#222] transition-colors"
+        className="w-full p-3 flex items-start gap-2 text-left hover:bg-[var(--border-light)] transition-colors"
         onClick={() => setOpen(v => {
           const next = !v
           if (next) onOpen?.()
@@ -55,7 +55,7 @@ export function OrderCard({ order, onStatus, onPrint, onOpen, compact = false }:
       >
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-            <span className="font-mono font-bold text-xs text-white">
+            <span className="font-mono font-bold text-xs text-[var(--text)]">
               #{order.id.slice(0, 8).toUpperCase()}
             </span>
             <span className={`text-[10px] px-1.5 py-0.5 rounded border ${STATUS_COLORS[order.status]}`}>
@@ -84,55 +84,55 @@ export function OrderCard({ order, onStatus, onPrint, onOpen, compact = false }:
               </span>
             )}
           </div>
-          <p className="font-semibold text-sm text-white truncate">{order.customer_name}</p>
-          <p className="text-xs text-gray-500 mt-0.5">
+            <p className="font-semibold text-sm text-[var(--text)] truncate">{order.customer_name}</p>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">
             {!compact && <>{order.order_items.length} {order.order_items.length === 1 ? 'item' : 'itens'} · </>}
             {PAYMENT_LABELS[order.payment_method] || order.payment_method}
           </p>
           {order.notes && (
-            <p className="text-xs text-amber-400 mt-0.5 flex items-center gap-1 truncate">
+            <p className="text-xs text-[var(--primary)] mt-0.5 flex items-center gap-1 truncate">
               <MessageSquare size={10} className="flex-shrink-0" />
               {order.notes.slice(0, 45)}{order.notes.length > 45 ? '…' : ''}
             </p>
           )}
         </div>
         <div className="flex flex-col items-end gap-1 flex-shrink-0">
-          <span className="text-amber-400 font-bold text-sm">{fmtMoney(order.total_cents)}</span>
-          <span className={`text-[10px] flex items-center gap-0.5 ${isOld ? 'text-red-400' : 'text-gray-500'}`}>
+          <span className="text-[var(--primary)] font-bold text-sm">{fmtMoney(order.total_cents)}</span>
+          <span className={`text-[10px] flex items-center gap-0.5 ${isOld ? 'text-[var(--danger)]' : 'text-[var(--text-muted)]'}`}>
             <Clock size={9} />{ago}
           </span>
-          {open ? <ChevronUp size={12} className="text-gray-600" /> : <ChevronDown size={12} className="text-gray-600" />}
+          {open ? <ChevronUp size={12} className="text-[var(--text-xmuted)]" /> : <ChevronDown size={12} className="text-[var(--text-xmuted)]" />}
         </div>
       </button>
 
       {/* Expanded */}
       {open && (
-        <div className="border-t border-[#2a2a2a] p-3 space-y-3 text-sm">
+        <div className="border-t border-[var(--border)] p-3 space-y-3 text-sm">
           {/* Items */}
           <div className="space-y-1">
             {order.order_items.map(item => (
               <div key={item.id}>
                 <div className="flex justify-between">
-                  <span className="text-gray-200">{item.quantity}× {item.product_name}</span>
-                  <span className="text-gray-500">{fmtMoney(item.subtotal_cents)}</span>
+                  <span className="text-[var(--text)]">{item.quantity}× {item.product_name}</span>
+                  <span className="text-[var(--text-muted)]">{fmtMoney(item.subtotal_cents)}</span>
                 </div>
                 {item.addon_selections?.map((a, i) => (
-                  <p key={i} className="text-[11px] text-gray-500 pl-3">
+                  <p key={i} className="text-[11px] text-[var(--text-muted)] pl-3">
                     + {a.selectedOptions.map(o => o.name).join(', ')}
                   </p>
                 ))}
               </div>
             ))}
-            <div className="flex justify-between font-bold pt-1 border-t border-[#2a2a2a]">
+            <div className="flex justify-between font-bold pt-1 border-t border-[var(--border)]">
               <span>Total</span>
-              <span className="text-amber-400">{fmtMoney(order.total_cents)}</span>
+              <span className="text-[var(--primary)]">{fmtMoney(order.total_cents)}</span>
             </div>
           </div>
 
           {/* Address */}
-          <div className="text-xs text-gray-500 space-y-0.5">
+          <div className="text-xs text-[var(--text-muted)] space-y-0.5">
             {isPickup ? (
-              <p className="flex items-start gap-1 text-amber-300">
+              <p className="flex items-start gap-1 text-[var(--primary-hover)]">
                 <MapPin size={10} className="mt-0.5 flex-shrink-0" />
                 <span><span className="font-bold">Retirar em:</span> {pickupAddress || 'Endereço a confirmar com a loja'}</span>
               </p>
@@ -149,7 +149,7 @@ export function OrderCard({ order, onStatus, onPrint, onOpen, compact = false }:
 
           {/* Notes */}
           {order.notes && (
-            <p className="text-xs bg-amber-500/10 border border-amber-500/20 rounded-lg px-2 py-1.5 text-amber-300">
+            <p className="text-xs bg-[var(--primary-tint)] border border-amber-500/20 rounded-lg px-2 py-1.5 text-[var(--primary-hover)]">
               <span className="font-semibold">Obs:</span> {order.notes}
             </p>
           )}
@@ -160,7 +160,7 @@ export function OrderCard({ order, onStatus, onPrint, onOpen, compact = false }:
             {next && (
               <button
                 onClick={() => onStatus(order.id, next)}
-                className="flex-1 text-xs font-semibold py-2 px-3 rounded-lg bg-amber-500 hover:bg-amber-400 text-black transition-colors"
+                className="flex-1 text-xs font-semibold py-2 px-3 rounded-lg bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-[var(--primary-fg)] transition-colors"
               >
                 → {STATUS_LABELS[next]}
               </button>
@@ -169,14 +169,14 @@ export function OrderCard({ order, onStatus, onPrint, onOpen, compact = false }:
             <div className="flex flex-wrap gap-1">
               {ALL_STATUSES.filter(s => s !== order.status && s !== next).map(s => (
                 <button key={s} onClick={() => onStatus(order.id, s)}
-                  className="text-[10px] px-2 py-1 rounded-lg border border-[#333] hover:border-amber-500 hover:text-amber-400 text-gray-400 transition-colors">
+                  className="text-[10px] px-2 py-1 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] text-[var(--text-muted)] transition-colors">
                   {STATUS_LABELS[s]}
                 </button>
               ))}
             </div>
             <button
               onClick={() => onPrint(order)}
-              className="flex items-center gap-1 text-[10px] px-2.5 py-1.5 rounded-lg border border-[#333] hover:border-amber-500 hover:text-amber-400 text-gray-400 transition-colors ml-auto"
+              className="flex items-center gap-1 text-[10px] px-2.5 py-1.5 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] text-[var(--text-muted)] transition-colors ml-auto"
             >
               <Printer size={11} /> Imprimir
             </button>
@@ -197,8 +197,8 @@ function corDaLoja(nome: string): React.CSSProperties {
   let soma = 0
   for (const ch of nome) soma = (soma * 31 + ch.charCodeAt(0)) % 360
   return {
-    backgroundColor: `hsl(${soma} 70% 22%)`,
-    color: `hsl(${soma} 85% 78%)`,
-    boxShadow: `0 0 0 1px hsl(${soma} 60% 35%)`,
+    backgroundColor: `hsl(${soma} 72% 94%)`,
+    color: `hsl(${soma} 52% 28%)`,
+    boxShadow: `0 0 0 1px hsl(${soma} 48% 72%)`,
   }
 }

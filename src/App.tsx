@@ -291,12 +291,12 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-[#0f0f0f] text-white select-none">
+    <div className="h-screen flex flex-col bg-[var(--bg)] text-[var(--text)] select-none">
       <div
-        className="flex items-center gap-3 px-4 py-2.5 bg-[#141414] border-b border-[#222] flex-shrink-0"
+        className="flex items-center gap-3 px-4 py-2.5 bg-[var(--surface)] border-b border-[var(--border)] flex-shrink-0 shadow-[var(--shadow-sm)]"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        <span className="flex items-center gap-1.5 text-amber-400 font-bold text-sm">
+        <span className="flex items-center gap-1.5 text-[var(--primary)] font-bold text-sm">
           <CapivaraMark size={16} />
           {/* Com duas lojas, o nome de uma delas no cabeçalho seria mentira —
               a etiqueta de cada pedido é que diz de quem ele é. */}
@@ -312,7 +312,7 @@ export default function App() {
         {stores.filter((l) => !l.online).map((l) => (
           <span
             key={l.id}
-            className="text-[11px] rounded-full border border-red-500/30 bg-red-500/10 text-red-300 px-2 py-0.5"
+            className="text-[11px] rounded-full border border-red-500/30 bg-red-500/10 text-[var(--danger)] px-2 py-0.5"
           >
             {l.storeName ?? 'Loja'} sem conexão
           </span>
@@ -320,7 +320,7 @@ export default function App() {
         <div className="flex-1" />
 
         {notifications.length > 0 && (
-          <div className="bg-amber-500/15 border border-amber-500/30 rounded-xl px-3 py-1 text-xs text-amber-300 max-w-64 truncate">
+          <div className="bg-[var(--primary-tint)] border border-amber-500/30 rounded-xl px-3 py-1 text-xs text-[var(--primary-hover)] max-w-64 truncate">
             🔔 {notifications[0]}
           </div>
         )}
@@ -328,19 +328,19 @@ export default function App() {
         <div className="flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           {configured && (
             <>
-              <button onClick={() => void loadOrders()} title="Atualizar pedidos" className="p-1.5 rounded-lg hover:bg-[#222] text-gray-400 hover:text-white transition-colors">
+              <button onClick={() => void loadOrders()} title="Atualizar pedidos" className="p-1.5 rounded-lg hover:bg-[var(--border-light)] text-[var(--text-muted)] hover:text-[var(--text)] transition-colors">
                 <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
               </button>
               <button
                 onClick={() => void toggleAutoPrint()}
                 title={autoPrint ? 'Impressão automática ligada' : 'Impressão automática desligada'}
-                className={`p-1.5 rounded-lg transition-colors ${autoPrint ? 'text-green-400 hover:bg-green-500/10' : 'text-gray-600 hover:bg-[#222]'}`}
+                className={`p-1.5 rounded-lg transition-colors ${autoPrint ? 'text-[var(--success)] hover:bg-green-500/10' : 'text-[var(--text-xmuted)] hover:bg-[var(--border-light)]'}`}
               >
                 <Printer size={14} />
               </button>
             </>
           )}
-          <button onClick={() => setTab('kanban')} title="Pedidos" className={`relative p-1.5 rounded-lg transition-colors ${tab === 'kanban' ? 'text-amber-400' : 'text-gray-500 hover:text-white hover:bg-[#222]'}`}>
+          <button onClick={() => setTab('kanban')} title="Pedidos" className={`relative p-1.5 rounded-lg transition-colors ${tab === 'kanban' ? 'text-[var(--primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--border-light)]'}`}>
             <LayoutGrid size={14} />
             {unacknowledgedOrders.length > 0 && (
               <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
@@ -349,8 +349,8 @@ export default function App() {
             )}
           </button>
           {configured && (
-            <button onClick={() => setTab('whatsapp')} title="WhatsApp" className={`relative p-1.5 rounded-lg transition-colors ${tab === 'whatsapp' ? 'text-amber-400' : 'text-gray-500 hover:text-white hover:bg-[#222]'}`}>
-              {whatsappDisconnected ? <WifiOff size={14} className="text-red-400" /> : <MessageCircle size={14} />}
+            <button onClick={() => setTab('whatsapp')} title="WhatsApp" className={`relative p-1.5 rounded-lg transition-colors ${tab === 'whatsapp' ? 'text-[var(--primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--border-light)]'}`}>
+              {whatsappDisconnected ? <WifiOff size={14} className="text-[var(--danger)]" /> : <MessageCircle size={14} />}
               {conversationsNeedingAttention.length > 0 && (
                 <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
                   {conversationsNeedingAttention.length}
@@ -359,11 +359,11 @@ export default function App() {
             </button>
           )}
           {configured && (
-            <button onClick={() => setTab('historico')} title="Histórico" className={`p-1.5 rounded-lg transition-colors ${tab === 'historico' ? 'text-amber-400' : 'text-gray-500 hover:text-white hover:bg-[#222]'}`}>
+            <button onClick={() => setTab('historico')} title="Histórico" className={`p-1.5 rounded-lg transition-colors ${tab === 'historico' ? 'text-[var(--primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--border-light)]'}`}>
               <History size={14} />
             </button>
           )}
-          <button onClick={() => setTab('settings')} title="Configurações" className={`p-1.5 rounded-lg transition-colors ${tab === 'settings' ? 'text-amber-400' : 'text-gray-500 hover:text-white hover:bg-[#222]'}`}>
+          <button onClick={() => setTab('settings')} title="Configurações" className={`p-1.5 rounded-lg transition-colors ${tab === 'settings' ? 'text-[var(--primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--border-light)]'}`}>
             <SettingsIcon size={14} />
           </button>
         </div>
@@ -373,29 +373,29 @@ export default function App() {
         <div className="flex items-center justify-between gap-3 flex-wrap px-3 py-2 bg-red-500/10 border-b border-red-500/30 flex-shrink-0">
           <div className="flex items-center gap-3 flex-wrap text-xs">
             {unacknowledgedOrders.length > 0 && (
-              <span className="flex items-center gap-1.5 text-amber-400 font-bold">
+                <span className="flex items-center gap-1.5 text-[var(--primary)] font-bold">
                 🔔 {unacknowledgedOrders.length} pedido{unacknowledgedOrders.length > 1 ? 's' : ''} novo{unacknowledgedOrders.length > 1 ? 's' : ''} não visto{unacknowledgedOrders.length > 1 ? 's' : ''}
               </span>
             )}
             {whatsappDisconnected && (
-              <span className="flex items-center gap-1.5 text-red-400 font-bold">
+                <span className="flex items-center gap-1.5 text-[var(--danger)] font-bold">
                 <WifiOff size={12} /> WhatsApp desconectado{connectionState ? ` (${connectionState})` : ''}
               </span>
             )}
             {conversationsNeedingAttention.length > 0 && (
-              <span className="flex items-center gap-1.5 text-amber-400 font-bold">
+                <span className="flex items-center gap-1.5 text-[var(--primary)] font-bold">
                 <MessageCircle size={12} /> {conversationsNeedingAttention.length} cliente{conversationsNeedingAttention.length > 1 ? 's' : ''} esperando resposta no WhatsApp
               </span>
             )}
           </div>
           <div className="flex items-center gap-2">
             {unacknowledgedOrders.length > 0 && tab !== 'kanban' && (
-              <button onClick={() => setTab('kanban')} className="text-[11px] px-2.5 py-1 rounded-lg bg-amber-500 text-black font-bold">
+              <button onClick={() => setTab('kanban')} className="text-[11px] px-2.5 py-1 rounded-lg bg-[var(--primary)] text-[var(--primary-fg)] font-bold">
                 Ver pedidos
               </button>
             )}
             {conversationsNeedingAttention.length > 0 && (
-              <button onClick={() => openWhatsappConversation(conversationsNeedingAttention[0].id)} className="text-[11px] px-2.5 py-1 rounded-lg bg-amber-500 text-black font-bold">
+              <button onClick={() => openWhatsappConversation(conversationsNeedingAttention[0].id)} className="text-[11px] px-2.5 py-1 rounded-lg bg-[var(--primary)] text-[var(--primary-fg)] font-bold">
                 Ver conversa
               </button>
             )}
@@ -409,12 +409,12 @@ export default function App() {
         {tab === 'whatsapp' && (
           <div className="h-full overflow-y-auto p-3">
             {whatsappDisconnected && (
-              <div className="flex items-center gap-1.5 text-red-400 font-bold text-sm rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 mb-3">
+              <div className="flex items-center gap-1.5 text-[var(--danger)] font-bold text-sm rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 mb-3">
                 <WifiOff size={14} /> WhatsApp desconectado{connectionState ? ` (${connectionState})` : ''}
               </div>
             )}
             {whatsappConversations.length === 0 ? (
-              <p className="text-center py-12 text-xs text-gray-600">Nenhuma conversa em atendimento manual no momento</p>
+              <p className="text-center py-12 text-xs text-[var(--text-xmuted)]">Nenhuma conversa em atendimento manual no momento</p>
             ) : (
               <div className="space-y-2">
                 {whatsappConversations.map(conversation => {
@@ -423,22 +423,22 @@ export default function App() {
                     <button
                       key={conversation.id}
                       onClick={() => openWhatsappConversation(conversation.id)}
-                      className="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left rounded-xl bg-[#1a1a1a] border border-[#2a2a2a] hover:bg-[#222] transition-colors"
+                      className="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left rounded-xl bg-[var(--card)] border border-[var(--border)] hover:bg-[var(--border-light)] transition-colors shadow-[var(--shadow-sm)]"
                     >
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
-                          {needsAttention && <span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0" />}
-                          <span className="text-sm font-medium text-white truncate">{conversation.phone}</span>
+                          {needsAttention && <span className="w-2 h-2 rounded-full bg-[var(--primary)] flex-shrink-0" />}
+                          <span className="text-sm font-medium text-[var(--text)] truncate">{conversation.phone}</span>
                           <span className={`text-[9px] px-1.5 py-0.5 rounded-full border flex-shrink-0 ${
                             conversation.status === 'awaiting_human'
-                              ? 'text-amber-400 border-amber-400/30 bg-amber-400/5'
-                              : 'text-green-400 border-green-400/30 bg-green-400/5'
+                              ? 'text-[var(--primary)] border-amber-500/30 bg-[var(--primary-tint)]'
+                              : 'text-[var(--success)] border-green-500/30 bg-green-500/5'
                           }`}>
                             {conversation.status === 'awaiting_human' ? 'aguardando' : 'manual'}
                           </span>
                         </div>
                         {conversation.lastMessage?.content && (
-                          <p className="text-xs text-gray-500 truncate">{conversation.lastMessage.content}</p>
+                          <p className="text-xs text-[var(--text-muted)] truncate">{conversation.lastMessage.content}</p>
                         )}
                       </div>
                     </button>
@@ -460,11 +460,11 @@ export default function App() {
         {tab === 'historico' && (
           <div className="h-full overflow-y-auto p-3 space-y-3">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-xs text-gray-500">Pedidos com mais de 24h — saem do Kanban, mas ficam com o status em que pararam.</p>
+              <p className="text-xs text-[var(--text-muted)]">Pedidos com mais de 24h — saem do Kanban, mas ficam com o status em que pararam.</p>
               <select
                 value={historyStatusFilter}
                 onChange={e => setHistoryStatusFilter(e.target.value as OrderStatus | '')}
-                className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500 flex-shrink-0"
+                className="bg-[var(--surface)] border border-[var(--border)] rounded-lg px-2.5 py-1.5 text-xs text-[var(--text)] focus:outline-none focus:border-[var(--primary)] flex-shrink-0"
               >
                 <option value="">Todos</option>
                 {ALL_STATUSES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
@@ -472,9 +472,9 @@ export default function App() {
             </div>
 
             {historyLoading ? (
-              <p className="text-center py-12 text-xs text-gray-600">Carregando...</p>
+              <p className="text-center py-12 text-xs text-[var(--text-xmuted)]">Carregando...</p>
             ) : historyOrders.length === 0 ? (
-              <p className="text-center py-12 text-xs text-gray-700">Nenhum pedido no histórico</p>
+              <p className="text-center py-12 text-xs text-[var(--text-muted)]">Nenhum pedido no histórico</p>
             ) : (
               <>
                 <div className="space-y-2">
@@ -486,7 +486,7 @@ export default function App() {
                   <button
                     onClick={() => void loadHistory(false)}
                     disabled={historyLoadingMore}
-                    className="w-full text-xs py-2.5 rounded-xl border border-[#2a2a2a] text-gray-400 hover:border-amber-500 hover:text-amber-400 transition-colors disabled:opacity-50"
+                    className="w-full text-xs py-2.5 rounded-xl border border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--primary)] hover:text-[var(--primary)] transition-colors disabled:opacity-50"
                   >
                     {historyLoadingMore ? 'Carregando...' : 'Carregar mais'}
                   </button>
@@ -501,8 +501,8 @@ export default function App() {
             <div className="text-center space-y-3">
               <p className="text-4xl">⚙️</p>
               <p className="font-semibold text-lg">Configure o app primeiro</p>
-              <p className="text-gray-500 text-sm">Informe a URL do cardápio e o token de integração nas configurações.</p>
-              <button onClick={() => setTab('settings')} className="mt-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-black font-semibold rounded-xl text-sm">Ir para configurações</button>
+              <p className="text-[var(--text-muted)] text-sm">Informe a URL do cardápio e o token de integração nas configurações.</p>
+              <button onClick={() => setTab('settings')} className="mt-2 px-5 py-2.5 bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-[var(--primary-fg)] font-semibold rounded-xl text-sm">Ir para configurações</button>
             </div>
           </div>
         )}
@@ -512,14 +512,14 @@ export default function App() {
             {KANBAN_COLUMNS.map(column => {
               const columnOrders = orders.filter(order => column.statuses.includes(order.status))
               return (
-                <div key={column.id} className="flex-1 flex flex-col min-w-0 border-r border-[#1a1a1a] last:border-0">
+                <div key={column.id} className="flex-1 flex flex-col min-w-0 border-r border-[var(--border)] last:border-0">
                   <div className="px-3 py-2.5 border-b-2 flex items-center justify-between flex-shrink-0" style={{ borderBottomColor: column.accent }}>
                     <span className="font-bold text-sm" style={{ color: column.accent }}>{column.label}</span>
                     {columnOrders.length > 0 && <span className="text-[11px] font-bold rounded-full w-5 h-5 flex items-center justify-center" style={{ background: `${column.accent}22`, color: column.accent }}>{columnOrders.length}</span>}
                   </div>
                   <div className="flex-1 overflow-y-auto p-2 space-y-2">
-                    {loading && columnOrders.length === 0 && <p className="text-center py-8 text-xs text-gray-600">Carregando...</p>}
-                    {!loading && columnOrders.length === 0 && <p className="text-center py-8 text-xs text-gray-700">Vazio</p>}
+                    {loading && columnOrders.length === 0 && <p className="text-center py-8 text-xs text-[var(--text-xmuted)]">Carregando...</p>}
+                    {!loading && columnOrders.length === 0 && <p className="text-center py-8 text-xs text-[var(--text-muted)]">Vazio</p>}
                     {columnOrders.map(order => (
                       <OrderCard
                         key={order.id}
