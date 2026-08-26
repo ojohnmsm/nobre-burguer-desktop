@@ -92,6 +92,21 @@ let tray: Tray | null = null
 let printWindow: BrowserWindow | null = null
 let isQuitting = false
 
+function loadTrayIcon() {
+  const path = app.isPackaged
+    ? join(process.resourcesPath, 'tray-icon.png')
+    : join(app.getAppPath(), 'build', 'icon.png')
+  const icon = nativeImage.createFromPath(path)
+
+  if (!icon.isEmpty()) return icon.resize({ width: 32, height: 32 })
+
+  // O arquivo da marca deveria sempre existir. Este recuo mantém uma bandeja
+  // identificável caso a instalação seja interrompida antes de copiar o asset.
+  return nativeImage.createFromDataURL(`data:image/svg+xml,${encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="15" fill="#D97706"/><path fill="white" d="M9 11h14v3H9zm2 5h10v3H11zm2 5h6v3h-6z"/></svg>'
+  )}`)
+}
+
 // ── Config (saved via ipcMain, persisted to userData) ──────────────────────
 const CONFIG_PATH = join(app.getPath('userData'), 'config.json')
 
@@ -790,6 +805,25 @@ ipcMain.handle('acknowledge-order', async (_e, orderId: string, connectionId?: s
   }
 })
 
+// A moldura é desenhada pelo renderer, mas o controle da janela continua no
+// processo principal. Assim o React não ganha acesso a APIs nativas amplas.
+ipcMain.handle('window-minimize', () => {
+  mainWindow?.minimize()
+})
+
+ipcMain.handle('window-toggle-maximize', () => {
+  if (!mainWindow) return false
+  if (mainWindow.isMaximized()) mainWindow.unmaximize()
+  else mainWindow.maximize()
+  return mainWindow.isMaximized()
+})
+
+ipcMain.handle('window-is-maximized', () => mainWindow?.isMaximized() ?? false)
+
+ipcMain.handle('window-close', () => {
+  mainWindow?.close()
+})
+
 // ── WhatsApp (chat com clientes, espelha o painel do admin na web) ─────────
 /**
  * Quais lojas este computador atende.
@@ -859,18 +893,28 @@ ipcMain.handle('mark-whatsapp-conversation-seen', async (_e, conversationId: str
 
 // ── App lifecycle ─────────────────────────────────────────────────────────
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null)
+
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 700,
     minWidth: 800,
     minHeight: 500,
     title: 'Cardapia — Pedidos',
+    frame: false,
+    backgroundColor: '#FAFAF8',
     webPreferences: {
       preload: join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
   })
+
+  const sendWindowMaximizedState = () => {
+    mainWindow?.webContents.send('window-maximized-changed', mainWindow.isMaximized())
+  }
+  mainWindow.on('maximize', sendWindowMaximizedState)
+  mainWindow.on('unmaximize', sendWindowMaximizedState)
 
   if (process.env.NODE_ENV === 'development') {
     mainWindow.loadURL('http://localhost:5173')
@@ -880,13 +924,7 @@ app.whenReady().then(() => {
   }
 
   // System tray
-  const icon = nativeImage.createFromDataURL(`data:image/svg+xml,${encodeURIComponent(`
-    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-      <rect width="64" height="64" rx="16" fill="#f59e0b"/>
-      <path d="M15 24h34v5H15zm4 8h26v5H19zm5 8h16v5H24z" fill="#111827"/>
-    </svg>
-  `)}`)
-  tray = new Tray(icon)
+  tray = new Tray(loadTrayIcon())
   tray.setToolTip('Cardapia')
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Abrir', click: () => mainWindow?.show() },

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { History, LayoutGrid, MessageCircle, Printer, RefreshCw, Settings as SettingsIcon, WifiOff } from 'lucide-react'
+import { History, LayoutGrid, Maximize2, MessageCircle, Minimize2, Minus, Printer, RefreshCw, Settings as SettingsIcon, WifiOff, X } from 'lucide-react'
 import { OrderCard } from './components/OrderCard'
 import { Settings } from './components/Settings'
 import { WhatsappPanel } from './components/WhatsappPanel'
@@ -13,6 +13,12 @@ const ALL_STATUSES: OrderStatus[] = [
   'pending', 'awaiting_payment', 'paid', 'preparing', 'out_for_delivery', 'delivered', 'cancelled'
 ]
 const HISTORY_PAGE_SIZE = 30
+
+// O desktop repete a proteção da API: uma resposta antiga não pode colocar um
+// Pix ou cartão online ainda pendente na tela, no som ou na impressão.
+function isOperationalOrder(order: Order): boolean {
+  return order.status !== 'awaiting_payment'
+}
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('kanban')
@@ -29,6 +35,7 @@ export default function App() {
   const autoPrintRef = useRef(true)
   const orderSoundIntervalRef = useRef<number | null>(null)
   const messageSoundIntervalRef = useRef<number | null>(null)
+  const [windowMaximized, setWindowMaximized] = useState(false)
 
   // ── Pedidos novos não vistos (abrir o card reconhece) ──────────────────────
   // O "visto" é persistido no banco (orders.acknowledged_at) via API em vez
@@ -36,7 +43,12 @@ export default function App() {
   // dispositivos (esse app rodando em vários PCs + o admin web) e sobrevive
   // a reload/restart, já que a fonte de verdade não é mais o estado de uma
   // instância específica.
-  const unacknowledgedOrders = orders.filter(order => !order.acknowledged_at && order.status !== 'delivered' && order.status !== 'cancelled')
+  const unacknowledgedOrders = orders.filter(order =>
+    isOperationalOrder(order)
+      && !order.acknowledged_at
+      && order.status !== 'delivered'
+      && order.status !== 'cancelled'
+  )
 
   function ackOrder(orderId: string) {
     setOrders(previous => previous.map(order =>
@@ -58,12 +70,13 @@ export default function App() {
 
     try {
       const data = await window.api.fetchOrders()
+      const operationalOrders = data.filter(isOperationalOrder)
       const newOrders = hasLoadedOrdersRef.current
-        ? data.filter(order => !knownOrderIdsRef.current.has(order.id))
+        ? operationalOrders.filter(order => !knownOrderIdsRef.current.has(order.id))
         : []
 
-      setOrders(data)
-      knownOrderIdsRef.current = new Set(data.map(order => order.id))
+      setOrders(operationalOrders)
+      knownOrderIdsRef.current = new Set(operationalOrders.map(order => order.id))
       hasLoadedOrdersRef.current = true
 
       for (const order of newOrders) {
@@ -290,14 +303,38 @@ export default function App() {
     }
   }
 
+  useEffect(() => {
+    let active = true
+    void window.api.isWindowMaximized().then(maximized => {
+      if (active) setWindowMaximized(maximized)
+    })
+    const unsubscribe = window.api.onWindowMaximizedChange(setWindowMaximized)
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [])
+
+  function toggleMaximizeWindow() {
+    void window.api.toggleMaximizeWindow().then(setWindowMaximized)
+  }
+
+  function handleTitleBarDoubleClick(event: React.MouseEvent<HTMLDivElement>) {
+    // Os botões ficam dentro da barra para parecerem nativos, mas dois cliques
+    // neles não podem propagar e maximizar a janela por acidente.
+    if ((event.target as HTMLElement).closest('button')) return
+    toggleMaximizeWindow()
+  }
+
   return (
-    <div className="h-screen flex flex-col bg-[var(--bg)] text-[var(--text)] select-none">
+    <div className={`h-screen flex flex-col bg-[var(--bg)] text-[var(--text)] select-none overflow-hidden ${windowMaximized ? '' : 'border border-[var(--border)] rounded-xl'}`}>
       <div
-        className="flex items-center gap-3 px-4 py-2.5 bg-[var(--surface)] border-b border-[var(--border)] flex-shrink-0 shadow-[var(--shadow-sm)]"
+        className="flex min-h-12 items-center gap-3 pl-4 pr-0 bg-[var(--surface)] border-b border-[var(--border)] flex-shrink-0 shadow-[var(--shadow-sm)]"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+        onDoubleClick={handleTitleBarDoubleClick}
       >
-        <span className="flex items-center gap-1.5 text-[var(--primary)] font-bold text-sm">
-          <CapivaraMark size={16} />
+        <span className="flex items-center gap-2 text-[var(--primary)] font-bold text-sm">
+          <CapivaraMark size={20} />
           {/* Com duas lojas, o nome de uma delas no cabeçalho seria mentira —
               a etiqueta de cada pedido é que diz de quem ele é. */}
           {stores.length === 1
@@ -365,6 +402,17 @@ export default function App() {
           )}
           <button onClick={() => setTab('settings')} title="Configurações" className={`p-1.5 rounded-lg transition-colors ${tab === 'settings' ? 'text-[var(--primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--border-light)]'}`}>
             <SettingsIcon size={14} />
+          </button>
+        </div>
+        <div className="ml-1 flex h-12 self-stretch border-l border-[var(--border)]" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          <button onClick={() => window.api.minimizeWindow()} title="Minimizar" aria-label="Minimizar" className="w-11 flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--border-light)] hover:text-[var(--text)] transition-colors">
+            <Minus size={16} />
+          </button>
+          <button onClick={toggleMaximizeWindow} title={windowMaximized ? 'Restaurar' : 'Maximizar'} aria-label={windowMaximized ? 'Restaurar' : 'Maximizar'} className="w-11 flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--border-light)] hover:text-[var(--text)] transition-colors">
+            {windowMaximized ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </button>
+          <button onClick={() => window.api.closeWindow()} title="Fechar" aria-label="Fechar" className="w-11 flex items-center justify-center text-[var(--text-muted)] hover:bg-red-600 hover:text-white transition-colors">
+            <X size={17} />
           </button>
         </div>
       </div>

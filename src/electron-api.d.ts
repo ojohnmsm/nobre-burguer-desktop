@@ -88,6 +88,11 @@ declare global {
       resumeWhatsappBot: (conversationId: string) => Promise<boolean>
       markWhatsappConversationSeen: (conversationId: string) => Promise<boolean>
       getNotificationSounds: () => Promise<NotificationSoundsResponse>
+      minimizeWindow: () => Promise<void>
+      toggleMaximizeWindow: () => Promise<boolean>
+      isWindowMaximized: () => Promise<boolean>
+      closeWindow: () => Promise<void>
+      onWindowMaximizedChange: (callback: (maximized: boolean) => void) => () => void
     }
   }
 }

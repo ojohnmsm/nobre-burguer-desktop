@@ -1,6 +1,6 @@
 {
   "name": "cardapia-desktop",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "Cardapia — Gerenciador de Pedidos",
   "main": "dist-electron/main/main.js",
   "engines": {
@@ -42,6 +42,7 @@
     "asar": true,
     "win": {
       "target": "nsis",
+      "icon": "build/icon.png",
       "signExecutable": false
     },
     "nsis": {
@@ -52,6 +53,12 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "tray-icon.png"
+      }
     ],
     "publish": {
       "provider": "github",

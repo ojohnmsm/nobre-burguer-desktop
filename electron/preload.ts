@@ -22,4 +22,13 @@ contextBridge.exposeInMainWorld('api', {
   resumeWhatsappBot:   (conversationId: string)                   => ipcRenderer.invoke('resume-whatsapp-bot', conversationId),
   markWhatsappConversationSeen: (conversationId: string)          => ipcRenderer.invoke('mark-whatsapp-conversation-seen', conversationId),
   getNotificationSounds: () => ipcRenderer.invoke('get-notification-sounds'),
+  minimizeWindow: () => ipcRenderer.invoke('window-minimize'),
+  toggleMaximizeWindow: () => ipcRenderer.invoke('window-toggle-maximize'),
+  isWindowMaximized: () => ipcRenderer.invoke('window-is-maximized'),
+  closeWindow: () => ipcRenderer.invoke('window-close'),
+  onWindowMaximizedChange: (callback: (maximized: boolean) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, maximized: boolean) => callback(maximized)
+    ipcRenderer.on('window-maximized-changed', listener)
+    return () => ipcRenderer.removeListener('window-maximized-changed', listener)
+  },
 })
