@@ -589,9 +589,9 @@ ipcMain.handle('save-config', (_e, input: DesktopConfigInput) => {
 
 ipcMain.handle('get-notification-sounds', async () => {
   try {
-    return await desktopRequest<{ orderSoundUrl: string | null; messageSoundUrl: string | null }>('/api/desktop/notification-sounds')
+    return await desktopRequest<{ orderSoundUrl: string | null; messageSoundUrl: string | null; driverSoundUrl: string | null }>('/api/desktop/notification-sounds')
   } catch {
-    return { orderSoundUrl: null, messageSoundUrl: null }
+    return { orderSoundUrl: null, messageSoundUrl: null, driverSoundUrl: null }
   }
 })
 
@@ -651,6 +651,14 @@ async function buscarEmTodasAsLojas(caminho: string): Promise<unknown[]> {
     if (r.status === 'fulfilled') juntos.push(...r.value)
     else console.error(`Loja ${conexoes[i].label || conexoes[i].id} indisponível:`, r.reason)
   })
+
+  // TODAS falharam (rede/servidor fora no boot) → ERRO, não lista vazia. Uma
+  // lista vazia aqui faria o renderer marcar "primeira carga feita" com zero
+  // pedidos conhecidos; a carga seguinte, bem-sucedida, trataria todo pedido de
+  // ontem como novo e reimprimiria tudo.
+  if (resultados.length > 0 && resultados.every((r) => r.status === 'rejected')) {
+    throw new Error('Nenhuma loja respondeu')
+  }
 
   // Ordena por chegada, misturando as lojas. Quem está no balcão reage ao
   // pedido que chegou, não à loja de onde ele veio.

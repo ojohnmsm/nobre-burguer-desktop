@@ -16,6 +16,7 @@ export interface DesktopConfig {
 export interface NotificationSoundsResponse {
   orderSoundUrl: string | null
   messageSoundUrl: string | null
+  driverSoundUrl: string | null
 }
 
 export interface DesktopConfigInput {

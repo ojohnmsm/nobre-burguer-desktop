@@ -9,7 +9,7 @@ import { CapivaraMark } from './components/CapivaraMark'
 import { KANBAN_COLUMNS, STATUS_LABELS, type Order, type OrderStatus } from './types'
 import { orderLabel } from './orderLabel'
 import type { WhatsappStatusConversation } from './electron-api'
-import { loadNotificationSounds, playMessageAlert, playOrderAlert } from './notification-sound'
+import { loadNotificationSounds, playDriverArrivedAlert, playMessageAlert, playOrderAlert } from './notification-sound'
 
 type Tab = 'kanban' | 'historico' | 'whatsapp' | 'settings'
 const ALL_STATUSES: OrderStatus[] = [
@@ -48,6 +48,7 @@ export default function App() {
   const notificationTimerRef = useRef<number | null>(null)
   const knownOrderIdsRef = useRef<Set<string>>(new Set())
   const hasLoadedOrdersRef = useRef(false)
+  const driverStageRef = useRef<Map<string, string>>(new Map())
   const autoPrintRef = useRef(true)
   const autoPrintChannelsRef = useRef<string>('all')
   const [windowMaximized, setWindowMaximized] = useState(false)
@@ -94,10 +95,19 @@ export default function App() {
       knownOrderIdsRef.current = new Set(operationalOrders.map(order => order.id))
       hasLoadedOrdersRef.current = true
 
-      // Toca UMA vez quando chega pedido novo — não em laço até reconhecer.
-      if (newOrders.length > 0) playOrderAlert()
+      // Só alerta/imprime pedido criado agora há pouco. Um pedido que "apareceu"
+      // na lista mas é de horas atrás (computador reaberto depois de fechado,
+      // pedido envelhecendo para dentro da janela de 24h, primeira carga que
+      // falhou) NÃO é novo: fica no kanban com o selo "não visto", sem tocar
+      // nem imprimir.
+      const RECENTE_MS = 20 * 60 * 1000
+      const agora = Date.now()
+      const paraAlertar = newOrders.filter(order => agora - new Date(order.created_at).getTime() < RECENTE_MS)
 
-      for (const order of newOrders) {
+      // Toca UMA vez quando chega pedido novo — não em laço até reconhecer.
+      if (paraAlertar.length > 0) playOrderAlert()
+
+      for (const order of paraAlertar) {
         const isPickup = order.fulfillment_type === 'pickup'
         const origem = order.channel === 'ifood' ? 'iFood — ' : order.channel === 'whatsapp' ? 'WhatsApp — ' : ''
         addNotification(`${isPickup ? 'RETIRADA — ' : ''}${origem}Novo pedido #${orderLabel(order)} — ${order.customer_name}`)
@@ -105,6 +115,24 @@ export default function App() {
           const result = await window.api.printOrder(order)
           if (result === 'no-printer') addNotification('Configure uma impressora para ativar a impressão automática')
         }
+      }
+
+      // Som de "entregador chegou": na transição para o estágio na_loja, uma
+      // vez por pedido. A primeira aparição não conta — só quando já vimos o
+      // entregador antes noutro estágio.
+      const novoStages = new Map<string, string>()
+      let entregadorChegou = false
+      for (const order of operationalOrders) {
+        const estagio = order.ifood_driver?.estagio
+        if (!estagio) continue
+        const anterior = driverStageRef.current.get(order.id)
+        if (estagio === 'na_loja' && anterior && anterior !== 'na_loja') entregadorChegou = true
+        novoStages.set(order.id, estagio)
+      }
+      driverStageRef.current = novoStages
+      if (entregadorChegou) {
+        playDriverArrivedAlert()
+        addNotification('🛵 Entregador do iFood chegou na loja')
       }
     } catch {
       if (!hasLoadedOrdersRef.current) setOrders([])

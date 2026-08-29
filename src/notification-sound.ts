@@ -1,7 +1,7 @@
-export type NotificationSoundKind = 'order' | 'message'
+export type NotificationSoundKind = 'order' | 'message' | 'driver'
 
 let audioContext: AudioContext | null = null
-const customAudio: Record<NotificationSoundKind, HTMLAudioElement | null> = { order: null, message: null }
+const customAudio: Record<NotificationSoundKind, HTMLAudioElement | null> = { order: null, message: null, driver: null }
 
 function getAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null
@@ -34,9 +34,11 @@ export async function loadNotificationSounds(): Promise<void> {
     const data = await window.api.getNotificationSounds()
     setSound('order', data?.orderSoundUrl ?? null)
     setSound('message', data?.messageSoundUrl ?? null)
+    setSound('driver', data?.driverSoundUrl ?? null)
   } catch {
     setSound('order', null)
     setSound('message', null)
+    setSound('driver', null)
   }
 }
 
@@ -60,11 +62,17 @@ export function playMessageAlert(): void {
   playCustomOrDefault('message')
 }
 
+/** Alerta de entregador do iFood que acabou de chegar na loja. */
+export function playDriverArrivedAlert(): void {
+  playCustomOrDefault('driver')
+}
+
 // Timbres diferentes por padrão — mesmo sem som customizado configurado,
-// pedido novo e mensagem já soam distintos um do outro.
+// pedido novo, mensagem e entregador já soam distintos.
 const DEFAULT_TONES: Record<NotificationSoundKind, { notes: number[]; type: OscillatorType }> = {
   order: { notes: [880, 1108, 880], type: 'square' },
   message: { notes: [659, 988], type: 'sine' },
+  driver: { notes: [523, 784, 1046], type: 'triangle' },
 }
 
 function playDefaultTone(kind: NotificationSoundKind): void {
