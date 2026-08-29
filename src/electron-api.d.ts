@@ -110,7 +110,7 @@ declare global {
       getStorePauseState: (connectionId?: string) => Promise<StorePauseState>
       setStorePause: (body: { alvo: 'loja' | 'ifood'; acao: 'pausar' | 'retomar'; minutos?: number }, connectionId?: string) => Promise<{ ok: boolean; error?: string }>
       onPrintError: (callback: (error: string) => void) => () => void
-      getStores: () => Promise<{ id: string; storeName: string | null; online: boolean }[]>
+      getStores: () => Promise<{ id: string; storeName: string | null; online: boolean; ifoodConectado: boolean; ifoodPollingParadoSegundos: number | null }[]>
       addConnection: (url: string, token: string) => Promise<{ erro?: string }>
       removeConnection: (id: string) => Promise<{ ok: boolean }>
       getWhatsappStatus: () => Promise<WhatsappStatusResponse>

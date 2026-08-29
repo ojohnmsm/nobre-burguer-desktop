@@ -773,7 +773,13 @@ ipcMain.handle('get-stores', async () => {
   const conexoes = getConnections()
 
   const nomes = await Promise.allSettled(
-    conexoes.map((c) => desktopRequest<{ storeName: string | null }>('/api/desktop/loja', {}, c.id))
+    conexoes.map((c) =>
+      desktopRequest<{ storeName: string | null; ifoodConectado?: boolean; ifoodPollingParadoSegundos?: number | null }>(
+        '/api/desktop/loja',
+        {},
+        c.id
+      )
+    )
   )
 
   const registros = readConnections()
@@ -790,6 +796,8 @@ ipcMain.handle('get-stores', async () => {
       // deixaria os pedidos daquela loja sem identificação na tela.
       storeName: nome ?? c.label ?? null,
       online: r.status === 'fulfilled',
+      ifoodConectado: r.status === 'fulfilled' ? Boolean(r.value.ifoodConectado) : false,
+      ifoodPollingParadoSegundos: r.status === 'fulfilled' ? r.value.ifoodPollingParadoSegundos ?? null : null,
     }
   })
 

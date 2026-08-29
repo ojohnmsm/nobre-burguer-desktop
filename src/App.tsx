@@ -38,7 +38,7 @@ function deveImprimir(channel: string, filtro: string): boolean {
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('kanban')
-  const [stores, setStores] = useState<{ id: string; storeName: string | null; online: boolean }[]>([])
+  const [stores, setStores] = useState<{ id: string; storeName: string | null; online: boolean; ifoodConectado: boolean; ifoodPollingParadoSegundos: number | null }[]>([])
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [autoPrint, setAutoPrint] = useState(true)
@@ -156,6 +156,16 @@ export default function App() {
     const interval = window.setInterval(() => { void loadOrders() }, 10000)
     return () => window.clearInterval(interval)
   }, [configured, loadOrders])
+
+  // Reconsulta o estado das lojas (nome, online, saúde do polling do iFood)
+  // periodicamente — é o que alimenta os chips de "sem conexão" na barra.
+  useEffect(() => {
+    if (!configured) return
+    const interval = window.setInterval(() => {
+      void window.api.getStores().then(setStores).catch(() => {})
+    }, 60000)
+    return () => window.clearInterval(interval)
+  }, [configured])
 
   useEffect(() => {
     void loadNotificationSounds()
@@ -350,6 +360,17 @@ export default function App() {
             {l.storeName ?? 'Loja'} sem conexão
           </span>
         ))}
+        {/* Polling do iFood parado = a loja sai do ar no iFood em silêncio. */}
+        {stores
+          .filter((l) => l.online && l.ifoodConectado && l.ifoodPollingParadoSegundos != null && l.ifoodPollingParadoSegundos > 180)
+          .map((l) => (
+            <span
+              key={`ifood-${l.id}`}
+              className="text-[11px] rounded-full border border-red-500/30 bg-red-500/10 text-[var(--danger)] px-2 py-0.5"
+            >
+              {stores.length > 1 ? `${l.storeName ?? 'Loja'} — ` : ''}iFood sem conexão há {Math.round((l.ifoodPollingParadoSegundos ?? 0) / 60)}min
+            </span>
+          ))}
         <div className="flex-1" />
 
         {notifications.length > 0 && (

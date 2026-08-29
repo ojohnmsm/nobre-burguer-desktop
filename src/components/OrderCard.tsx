@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Printer, Clock, Phone, MapPin, MessageSquare } 
 import { Order, OrderStatus, STATUS_LABELS, PAYMENT_LABELS, fmtMoney, timeAgo } from '../types'
 import { orderLabel } from '../orderLabel'
 import { origemDoPedido, proximaEtapa } from '../orderFlow'
+import { horaLocal, iconeVeiculo, labelEstagioEntregador, preparoInfo } from '../orderTiming'
 
 const STATUS_COLORS: Record<OrderStatus, string> = {
   pending:          'text-[var(--text-muted)] border-[var(--border)]',
@@ -33,6 +34,8 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
   const fim = isTerminal ? new Date(order.updated_at).getTime() : Date.now()
   const ago = timeAgo(order.created_at, fim)
   const isOld = !isTerminal && (fim - new Date(order.created_at).getTime()) > 30 * 60000
+  const preparo = preparoInfo(order, order.prep_target_minutes ?? 0)
+  const driver = order.ifood_driver ?? null
   const proxima = proximaEtapa(order)
   const isPickup = order.fulfillment_type === 'pickup'
   const pickupAddress = order.pickup_address?.trim()
@@ -94,6 +97,28 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
                 só polui o card. */}
             {!isIfood && <>{!compact && ' · '}{PAYMENT_LABELS[order.payment_method] || order.payment_method}</>}
           </p>
+          {!isTerminal && preparo.alvoISO && (
+            <p className={`text-xs mt-0.5 flex items-center gap-1 ${
+              preparo.atrasado ? 'text-[var(--danger)] font-bold'
+              : (preparo.restanteMin ?? 99) <= 10 ? 'text-[var(--primary)]'
+              : 'text-[var(--text-muted)]'
+            }`}>
+              <Clock size={10} className="flex-shrink-0" />
+              Preparar até {horaLocal(preparo.alvoISO)} · {preparo.atrasado
+                ? `atrasado ${Math.abs(preparo.restanteMin ?? 0)}min`
+                : `faltam ${preparo.restanteMin}min`}
+            </p>
+          )}
+          {driver && (
+            <p className="text-xs mt-0.5 flex items-center gap-1 text-[var(--text-muted)]">
+              <span>{iconeVeiculo(driver.veiculo)}</span>
+              <span className="truncate">
+                {driver.nome ? `${driver.nome} — ` : 'Entregador '}
+                <span className={driver.estagio === 'na_loja' ? 'text-[var(--primary)] font-bold' : ''}>{labelEstagioEntregador(driver.estagio)}</span>
+                {driver.estagio === 'a_caminho' && driver.pickupEtaMin != null && ` · chega em ${driver.pickupEtaMin}min`}
+              </span>
+            </p>
+          )}
           {order.notes && (
             <p className="text-xs text-[var(--primary)] mt-0.5 flex items-center gap-1 truncate">
               <MessageSquare size={10} className="flex-shrink-0" />

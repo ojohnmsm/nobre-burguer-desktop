@@ -56,6 +56,18 @@ export interface Order {
   ifood_pickup_code: string | null
   /** Vem no join da listagem — o número curto da loja, para montar "01012". */
   stores?: { store_number: number } | null
+  /** Payload bruto do iFood — usado para o horário prometido (delivery.deliveryDateTime). */
+  external_payload?: Record<string, unknown> | null
+  /** Estágio do entregador do iFood, anexado na listagem. */
+  ifood_driver?: {
+    estagio: 'a_caminho' | 'na_loja' | 'coletou'
+    nome: string | null
+    veiculo: string | null
+    pickupEtaMin?: number | null
+    deliveryEtaMin?: number | null
+  }
+  /** Meta de preparo do pedido próprio (min), carimbada na listagem. */
+  prep_target_minutes?: number
   acknowledged_at: string | null
   created_at: string
   updated_at: string
