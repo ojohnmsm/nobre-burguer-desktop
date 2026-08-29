@@ -26,13 +26,16 @@ interface Props {
 
 export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, compact = false }: Props) {
   const [open, setOpen] = useState(false)
-  const ago = timeAgo(order.created_at)
-  const isOld = (Date.now() - new Date(order.created_at).getTime()) > 30 * 60000
+  const isIfood = order.channel === 'ifood'
+  const isTerminal = order.status === 'delivered' || order.status === 'cancelled'
+  // Em pedido terminal a contagem CONGELA no instante em que ele terminou
+  // (updated_at), em vez de correr para sempre.
+  const fim = isTerminal ? new Date(order.updated_at).getTime() : Date.now()
+  const ago = timeAgo(order.created_at, fim)
+  const isOld = !isTerminal && (fim - new Date(order.created_at).getTime()) > 30 * 60000
   const proxima = proximaEtapa(order)
   const isPickup = order.fulfillment_type === 'pickup'
   const pickupAddress = order.pickup_address?.trim()
-  const isIfood = order.channel === 'ifood'
-  const isTerminal = order.status === 'delivered' || order.status === 'cancelled'
   const origem = origemDoPedido(order.channel)
 
   function handleCancel() {
@@ -101,7 +104,7 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
         <div className="flex flex-col items-end gap-1 flex-shrink-0">
           <span className="text-[var(--primary)] font-bold text-sm">{fmtMoney(order.total_cents)}</span>
           <span className={`text-[10px] flex items-center gap-0.5 ${isOld ? 'text-[var(--danger)]' : 'text-[var(--text-muted)]'}`}>
-            <Clock size={9} />{ago}
+            <Clock size={9} />{isTerminal ? `total ${ago}` : ago}
           </span>
           {open ? <ChevronUp size={12} className="text-[var(--text-xmuted)]" /> : <ChevronDown size={12} className="text-[var(--text-xmuted)]" />}
         </div>

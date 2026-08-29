@@ -58,6 +58,7 @@ export interface Order {
   stores?: { store_number: number } | null
   acknowledged_at: string | null
   created_at: string
+  updated_at: string
   order_items: OrderItem[]
 }
 
@@ -100,8 +101,8 @@ export function fmtMoney(cents: number) {
   return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
-export function timeAgo(iso: string) {
-  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
+export function timeAgo(iso: string, ate?: number) {
+  const diff = Math.floor(((ate ?? Date.now()) - new Date(iso).getTime()) / 60000)
   if (diff < 1)  return 'agora'
   if (diff < 60) return `${diff}min`
   return `${Math.floor(diff / 60)}h${diff % 60 > 0 ? String(diff % 60).padStart(2, '0') : ''}`
