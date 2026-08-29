@@ -1,46 +1,44 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronUp, Printer, Clock, Phone, MapPin, MessageSquare } from 'lucide-react'
-import { Order, OrderStatus, STATUS_LABELS, PAYMENT_LABELS, KANBAN_COLUMNS, fmtMoney, timeAgo } from '../types'
-
-const ALL_STATUSES: OrderStatus[] = [
-  'pending','awaiting_payment','paid','preparing','out_for_delivery','delivered','cancelled'
-]
+import { Order, OrderStatus, STATUS_LABELS, PAYMENT_LABELS, fmtMoney, timeAgo } from '../types'
+import { orderLabel } from '../orderLabel'
+import { origemDoPedido, proximaEtapa } from '../orderFlow'
 
 const STATUS_COLORS: Record<OrderStatus, string> = {
   pending:          'text-[var(--text-muted)] border-[var(--border)]',
   awaiting_payment: 'text-[var(--primary)] border-amber-300',
   paid:             'text-[var(--success)] border-green-300',
   preparing:        'text-blue-700 border-blue-300',
+  ready_to_pickup:  'text-teal-700 border-teal-300',
   out_for_delivery: 'text-purple-700 border-purple-300',
   delivered:        'text-[var(--text-xmuted)] border-[var(--border)]',
   cancelled:        'text-[var(--danger)] border-red-300',
-}
-
-// Next logical status transitions (fast buttons)
-const NEXT_STATUS: Partial<Record<OrderStatus, OrderStatus>> = {
-  pending:          'preparing',
-  awaiting_payment: 'preparing',
-  paid:             'preparing',
-  preparing:        'out_for_delivery',
-  out_for_delivery: 'delivered',
 }
 
 interface Props {
   order: Order
   onStatus: (id: string, status: OrderStatus) => void
   onPrint: (order: Order) => void
+  onCancelIfood?: (order: Order) => void
   onOpen?: () => void
   compact?: boolean
 }
 
-export function OrderCard({ order, onStatus, onPrint, onOpen, compact = false }: Props) {
+export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, compact = false }: Props) {
   const [open, setOpen] = useState(false)
   const ago = timeAgo(order.created_at)
   const isOld = (Date.now() - new Date(order.created_at).getTime()) > 30 * 60000
-  const next = NEXT_STATUS[order.status]
+  const proxima = proximaEtapa(order)
   const isPickup = order.fulfillment_type === 'pickup'
   const pickupAddress = order.pickup_address?.trim()
-  const viaWhatsapp = order.channel === 'whatsapp'
+  const isIfood = order.channel === 'ifood'
+  const isTerminal = order.status === 'delivered' || order.status === 'cancelled'
+  const origem = origemDoPedido(order.channel)
+
+  function handleCancel() {
+    if (isIfood) { onCancelIfood?.(order); return }
+    if (window.confirm('Cancelar este pedido?')) onStatus(order.id, 'cancelled')
+  }
 
   return (
     <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl overflow-hidden select-none shadow-[var(--shadow-sm)]">
@@ -56,7 +54,14 @@ export function OrderCard({ order, onStatus, onPrint, onOpen, compact = false }:
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 mb-1 flex-wrap">
             <span className="font-mono font-bold text-xs text-[var(--text)]">
-              #{order.id.slice(0, 8).toUpperCase()}
+              #{orderLabel(order)}
+            </span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded font-black tracking-wide ${
+              origem.tom === 'ifood' ? 'bg-red-500 text-white'
+              : origem.tom === 'whatsapp' ? 'bg-green-500 text-black'
+              : 'bg-[var(--border-light)] text-[var(--text-muted)]'
+            }`}>
+              {origem.label.toUpperCase()}
             </span>
             <span className={`text-[10px] px-1.5 py-0.5 rounded border ${STATUS_COLORS[order.status]}`}>
               {STATUS_LABELS[order.status]}
@@ -76,11 +81,6 @@ export function OrderCard({ order, onStatus, onPrint, onOpen, compact = false }:
             {isPickup && (
               <span className="text-[10px] px-2 py-0.5 bg-amber-400 text-black font-black tracking-wide shadow-[0_0_0_1px_rgba(251,191,36,.45)]">
                 RETIRADA
-              </span>
-            )}
-            {viaWhatsapp && (
-              <span className="text-[10px] px-2 py-0.5 bg-green-500 text-black font-black tracking-wide shadow-[0_0_0_1px_rgba(34,197,94,.45)]">
-                WHATSAPP
               </span>
             )}
           </div>
@@ -121,6 +121,9 @@ export function OrderCard({ order, onStatus, onPrint, onOpen, compact = false }:
                     + {a.selectedOptions.map(o => o.name).join(', ')}
                   </p>
                 ))}
+                {item.notes && (
+                  <p className="text-[11px] text-[var(--primary)] pl-3">obs: {item.notes}</p>
+                )}
               </div>
             ))}
             <div className="flex justify-between font-bold pt-1 border-t border-[var(--border)]">
@@ -145,6 +148,12 @@ export function OrderCard({ order, onStatus, onPrint, onOpen, compact = false }:
               </p>
             )}
             <p className="flex items-center gap-1"><Phone size={10} /> {order.customer_phone}</p>
+            {isIfood && order.ifood_pickup_code && (
+              <p className="text-[var(--text)]">
+                <span className="font-bold">Código de coleta:</span>{' '}
+                <span className="font-mono text-[var(--primary)]">{order.ifood_pickup_code}</span>
+              </p>
+            )}
           </div>
 
           {/* Notes */}
@@ -154,32 +163,35 @@ export function OrderCard({ order, onStatus, onPrint, onOpen, compact = false }:
             </p>
           )}
 
-          {/* Actions */}
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Quick next-step button */}
-            {next && (
+          {/* Ações — fluxo só pra frente: um botão grande avança a etapa. */}
+          <div className="space-y-2">
+            {proxima && (
               <button
-                onClick={() => onStatus(order.id, next)}
-                className="flex-1 text-xs font-semibold py-2 px-3 rounded-lg bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-[var(--primary-fg)] transition-colors"
+                onClick={() => onStatus(order.id, proxima.status)}
+                className="w-full text-sm font-bold py-2.5 px-3 rounded-lg bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-[var(--primary-fg)] transition-colors"
               >
-                → {STATUS_LABELS[next]}
+                {proxima.label}
               </button>
             )}
-            {/* All status options */}
-            <div className="flex flex-wrap gap-1">
-              {ALL_STATUSES.filter(s => s !== order.status && s !== next).map(s => (
-                <button key={s} onClick={() => onStatus(order.id, s)}
-                  className="text-[10px] px-2 py-1 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] text-[var(--text-muted)] transition-colors">
-                  {STATUS_LABELS[s]}
+            {isIfood && order.status === 'out_for_delivery' && (
+              <p className="text-[10px] text-[var(--text-muted)] text-center">O iFood conclui quando o entregador finalizar.</p>
+            )}
+            <div className="flex items-center gap-2">
+              {!isTerminal && (
+                <button
+                  onClick={handleCancel}
+                  className="text-[11px] px-2.5 py-1.5 rounded-lg border border-[var(--border)] text-[var(--text-muted)] hover:border-red-500 hover:text-[var(--danger)] transition-colors"
+                >
+                  Cancelar
                 </button>
-              ))}
+              )}
+              <button
+                onClick={() => onPrint(order)}
+                className="flex items-center gap-1 text-[11px] px-2.5 py-1.5 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] text-[var(--text-muted)] transition-colors ml-auto"
+              >
+                <Printer size={11} /> Imprimir
+              </button>
             </div>
-            <button
-              onClick={() => onPrint(order)}
-              className="flex items-center gap-1 text-[10px] px-2.5 py-1.5 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] text-[var(--text-muted)] transition-colors ml-auto"
-            >
-              <Printer size={11} /> Imprimir
-            </button>
           </div>
         </div>
       )}

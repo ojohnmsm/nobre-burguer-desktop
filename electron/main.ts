@@ -2,8 +2,9 @@ import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, safeStorage, dial
 import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs'
-import { exec } from 'child_process'
 import { randomUUID } from 'crypto'
+import { buildReceiptEscPos, printRawEscPos } from './escpos'
+import { orderLabel, origemLabel } from './receiptFormat'
 
 // ── Atualização automática ────────────────────────────────────────────────
 // O instalador e o latest.yml ficam nas releases do GitHub, conforme
@@ -259,6 +260,8 @@ interface DesktopConfigInput {
   apiBaseUrl?: string
   desktopApiKey?: string
   printerName?: string
+  /** '58' (32 colunas) ou '80' (48 colunas). */
+  printerWidth?: string
   autoPrint?: string
   autoStart?: string
 }
@@ -278,6 +281,7 @@ function getConfigView() {
     apiBaseUrl: conexoes[0]?.apiBaseUrl || '',
     desktopApiKeyConfigured: conexoes.length > 0,
     printerName: config.printerName || '',
+    printerWidth: config.printerWidth || '58',
     autoPrint: config.autoPrint || 'true',
     autoStart: config.autoStart || 'true',
   }
@@ -295,6 +299,7 @@ function saveConfigInput(input: DesktopConfigInput) {
   const next: Record<string, string> = {
     ...current,
     printerName: input.printerName ?? current.printerName ?? '',
+    printerWidth: input.printerWidth ?? current.printerWidth ?? '58',
     autoPrint: input.autoPrint ?? current.autoPrint ?? 'true',
     autoStart: input.autoStart ?? current.autoStart ?? 'true',
   }
@@ -372,147 +377,19 @@ async function desktopRequest<T>(
   return payload as T
 }
 
-// ── Supabase Realtime subscription ────────────────────────────────────────
-// ── ASCII normalizer: strips diacritics so thermal printer never garbles ─
-// "João" → "Joao", "Coração" → "Coracao", "Ação" → "Acao"
-function ascii(s: unknown): string {
-  return String(s ?? '')
-    .normalize('NFD')                          // decompose: "ã" → "a" + combining-tilde
-    .replace(/[̀-ͯ]/g, '')           // drop all combining diacritics
-    .replace(/[^\x20-\x7E]/g, '?')            // replace remaining non-ASCII with ?
-}
+// ── Impressão da comanda ─────────────────────────────────────────────────
+// Caminho primário: ESC/POS cru pelo spooler do Windows (electron/escpos.ts) —
+// ignora o driver, que numa térmica assume A4/Carta e desperdiça papel.
+// Fallback: HTML via BrowserWindow oculta (buildReceiptHtml + chromiumPrint).
 
-// ── Plain-text receipt — PRIMARY print path ───────────────────────────────
-function buildReceiptText(order: Record<string, unknown>): string {
-  const W = 32
-  const ctr = (s: string) => {
-    const pad = Math.max(0, Math.floor((W - s.length) / 2))
-    return ' '.repeat(pad) + s
-  }
-  const row = (l: string, r: string) => {
-    const maxL = W - r.length - 1
-    const lt = l.length > maxL ? l.substring(0, maxL) : l
-    return lt + ' '.repeat(Math.max(0, W - lt.length - r.length)) + r
-  }
-  const R = (cents: number) => 'R$' + (cents / 100).toFixed(2).replace('.', ',')
-  const wrap = (value: string) => {
-    const words = value.trim().split(/\s+/).filter(Boolean)
-    const lines: string[] = []
-    let line = ''
-
-    for (const word of words) {
-      if (!line || line.length + word.length + 1 <= W) {
-        line = line ? `${line} ${word}` : word
-      } else {
-        lines.push(line)
-        line = word
-      }
-    }
-
-    if (line) lines.push(line)
-    return lines
-  }
-  const PAYMENT: Record<string, string> = {
-    pix: 'Pix', cash: 'Dinheiro', credit_card: 'Credito',
-    debit_card: 'Debito', meal_voucher: 'Vale Ref.', food_voucher: 'Vale Alim.',
-  }
-  const date = new Date(order.created_at as string).toLocaleString('pt-BR', {
-    day: '2-digit', month: '2-digit', year: '2-digit',
-    hour: '2-digit', minute: '2-digit',
-  })
-  const items = (order.order_items as Record<string, unknown>[]) || []
-  const DIV = '-'.repeat(W)
-  const isPickup = order.fulfillment_type === 'pickup'
-  const pickupAddress = ascii(order.pickup_address).trim()
-
-  const addrLine = [
-    ascii(order.address),
-    ascii(order.address_number),
-    order.address_complement ? ascii(order.address_complement) : '',
-  ].filter(Boolean).join(', ')
-
-  const cityLine = [
-    order.neighborhood ? ascii(order.neighborhood) + ' - ' : '',
-    ascii(order.city),
-    '/',
-    ascii(order.state),
-  ].join('')
-
-  const destinationLines = isPickup
-    ? [ctr('*** RETIRADA ***'), ...wrap(`RETIRAR EM: ${pickupAddress || 'CONFIRMAR COM A LOJA'}`)]
-    : [...wrap(addrLine), ...wrap(cityLine)]
-
-  const lines: string[] = [
-    ctr('*** COMANDA ***'),
-    ctr(date),
-    ...(order.channel === 'whatsapp' ? [ctr('=== VIA WHATSAPP ===')] : []),
-    DIV,
-    `#${(order.id as string).slice(0, 8).toUpperCase()}`,
-    ascii(order.customer_name),
-    ascii(order.customer_phone),
-    DIV,
-    ...destinationLines,
-    DIV,
-    ...items.flatMap((item: Record<string, unknown>) => {
-      const addons = ((item.addon_selections as { groupName: string; selectedOptions: { name: string }[] }[]) || [])
-        .flatMap(a => a.selectedOptions.map(o => `  + ${ascii(o.name)}`))
-      return [
-        row(`${item.quantity}x ${ascii(item.product_name)}`, R(item.subtotal_cents as number)),
-        ...addons,
-      ]
-    }),
-    DIV,
-    row('Subtotal', R(order.subtotal_cents as number)),
-    row(isPickup ? 'Retirada' : 'Entrega', R(order.delivery_fee_cents as number)),
-    '='.repeat(W),
-    row('TOTAL', R(order.total_cents as number)),
-    '='.repeat(W),
-    `Pagto: ${PAYMENT[order.payment_method as string] || ascii(order.payment_method)}`,
-    ...(order.change_for_cents ? [`Troco: ${R(order.change_for_cents as number)}`] : []),
-    ...(order.notes ? [DIV, `Obs: ${ascii(order.notes)}`] : []),
-    DIV,
-    ctr('Obrigado!'),
-    '', '', '',   // feed paper forward before tearing
-  ]
-
-  return lines.join('\r\n')
-}
-
-// ── PRIMARY: PowerShell Out-Printer (direct to Windows print queue) ───────
-// This is the most reliable path for thermal printers on Windows because
-// it sends plain ASCII text — no Chromium rendering, no font fallback,
-// no ESC/POS conflicts from UTF-8 bytes in the GDI print stream.
-function printWithPowerShell(text: string, printerName: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const tmpTxt = join(app.getPath('temp'), `nobre-ps-receipt-${randomUUID()}.txt`)
-    // Write as ASCII — guarantees no high bytes reach the thermal printer driver
-    writeFileSync(tmpTxt, Buffer.from(text, 'ascii'))
-
-    // Escape single quotes for PowerShell string literals
-    const safeFile    = tmpTxt.replace(/\\/g, '\\\\').replace(/'/g, "''")
-    const safePrinter = printerName.replace(/'/g, "''")
-
-    // Read as Latin-1 (ASCII subset) and pipe directly to print queue
-    const cmd =
-      `powershell -NoProfile -NonInteractive -Command ` +
-      `"$t = [IO.File]::ReadAllText('${safeFile}', [Text.Encoding]::ASCII); ` +
-      `$t | Out-Printer -Name '${safePrinter}'"`
-
-    exec(cmd, { timeout: 20000 }, (err) => {
-      try { unlinkSync(tmpTxt) } catch { /* ignore */ }
-      if (err) reject(err)
-      else resolve()
-    })
-  })
-}
 
 // ── FALLBACK: Chromium webContents.print (HTML) ───────────────────────────
-function chromiumPrint(order: Record<string, unknown>, printerName: string): Promise<void> {
+function chromiumPrint(order: Record<string, unknown>, printerName: string, widthCols: 32 | 48): Promise<void> {
   return new Promise((resolve, reject) => {
     if (printWindow) { printWindow.destroy(); printWindow = null }
 
     const tmpFile = join(app.getPath('temp'), `nobre-receipt-${randomUUID()}.html`)
-    writeFileSync(tmpFile, buildReceiptHtml(order), 'utf-8')
+    writeFileSync(tmpFile, buildReceiptHtml(order, widthCols), 'utf-8')
 
     printWindow = new BrowserWindow({
       show: false,
@@ -537,7 +414,9 @@ function chromiumPrint(order: Record<string, unknown>, printerName: string): Pro
           {
             silent: true,
             deviceName: printerName,
-            pageSize: { width: 58000, height: 297000 },
+            // Largura do rolo; altura curta para o fallback não avançar meia
+            // folha como o caminho antigo fazia.
+            pageSize: { width: widthCols === 48 ? 80000 : 58000, height: 200000 },
             margins: { marginType: 'none' },
             printBackground: false,
             color: false,
@@ -561,21 +440,25 @@ function chromiumPrint(order: Record<string, unknown>, printerName: string): Pro
   })
 }
 
-// ── Entry point: try PowerShell first, fall back to Chromium ─────────────
-async function autoPrintOrder(order: Record<string, unknown>, printerName: string) {
+// ── Entry point: ESC/POS cru primeiro, HTML como reserva ────────────────
+async function autoPrintOrder(order: Record<string, unknown>, printerName: string, widthCols: 32 | 48) {
   try {
-    await printWithPowerShell(buildReceiptText(order), printerName)
-  } catch {
-    // PowerShell failed (e.g. Out-Printer not found, access denied) → try HTML
-    await chromiumPrint(order, printerName)
+    await printRawEscPos(buildReceiptEscPos(order, widthCols), printerName)
+  } catch (escposError) {
+    console.error('ESC/POS falhou, tentando HTML:', escposError)
+    await chromiumPrint(order, printerName, widthCols)
   }
 }
 
-function buildReceiptHtml(order: Record<string, unknown>): string {
+function buildReceiptHtml(order: Record<string, unknown>, widthCols: 32 | 48): string {
   // HTML-escape user data to prevent broken markup
   const h = (s: unknown) => String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+
+  const bodyWidthMm = widthCols === 48 ? 72 : 48
+  const pageWidthMm = widthCols === 48 ? 80 : 58
+  const origem = origemLabel(order.channel as string)
 
   const PAYMENT_LABELS: Record<string, string> = {
     pix: 'Pix', cash: 'Dinheiro', credit_card: 'Cr&eacute;dito',
@@ -611,17 +494,18 @@ function buildReceiptHtml(order: Record<string, unknown>): string {
     ? `<div class="pickup">RETIRADA</div><p class="sm bold">Retirar em:</p><p class="sm">${h(pickupAddress || 'Endereço a confirmar com a loja')}</p>`
     : `<p class="sm">${addrLine}</p><p class="sm">${cityLine}</p>`
 
-  const viaWhatsapp = order.channel === 'whatsapp'
+  const pickupCodeHtml = order.channel === 'ifood' && order.ifood_pickup_code
+    ? `<p class="bold sm">Codigo de coleta: ${h(order.ifood_pickup_code)}</p>`
+    : ''
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  @page { margin: 0; }
+  @page { size: ${pageWidthMm}mm auto; margin: 0; }
   html, body {
-    /* Página impressa a 58mm (ver pageSize no webContents.print) e sem
-       margem — 48mm deixa ~5mm de folga de cada lado, a área impressa
-       segura mais comum em bobinas de 58mm, sem desperdiçar papel. */
-    width: 48mm;
+    /* Largura do corpo deixa ~5mm de folga de cada lado da bobina, sem
+       desperdiçar papel. */
+    width: ${bodyWidthMm}mm;
     margin: 0 auto;
     font-family: 'Courier New', Courier, monospace;
     font-size: 8.5pt;
@@ -643,10 +527,11 @@ function buildReceiptHtml(order: Record<string, unknown>): string {
 
 <p class="center bold" style="font-size:10pt;letter-spacing:1px;margin-bottom:1mm">*** COMANDA ***</p>
 <p class="center sm">${date}</p>
-${viaWhatsapp ? '<p class="whatsapp">VIA WHATSAPP</p>' : ''}
+<p class="whatsapp">${origem}</p>
 <hr class="sep">
 
-<p class="big">#${(order.id as string).slice(0, 8).toUpperCase()}</p>
+<p class="big">#${h(orderLabel(order as never))}</p>
+${pickupCodeHtml}
 <p class="bold" style="font-size:10pt">${h(order.customer_name)}</p>
 <p class="sm">${h(order.customer_phone)}</p>
 
@@ -715,8 +600,9 @@ ipcMain.handle('get-printers', async () => {
 ipcMain.handle('print-order', async (_e, order: Record<string, unknown>) => {
   const cfg = loadConfig()
   if (!cfg.printerName) return 'no-printer'
+  const widthCols = cfg.printerWidth === '80' ? 48 : 32
   try {
-    await autoPrintOrder(order, cfg.printerName)
+    await autoPrintOrder(order, cfg.printerName, widthCols)
     return 'ok'
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Falha ao imprimir'
@@ -782,14 +668,59 @@ ipcMain.handle('fetch-order-history', async (_e, opts: { limit: number; offset: 
 
 ipcMain.handle('update-order-status', async (_e, orderId: string, status: string, connectionId?: string) => {
   try {
-    await desktopRequest(`/api/desktop/orders/${encodeURIComponent(orderId)}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status }),
-    }, connectionId)
-    return true
+    // Pedido do iFood responde `{ requested: true }` — pedimos ao iFood, o card
+    // só anda quando o evento voltar. Pedido próprio responde `{ success: true }`.
+    const data = await desktopRequest<{ requested?: boolean; message?: string }>(
+      `/api/desktop/orders/${encodeURIComponent(orderId)}`,
+      { method: 'PATCH', body: JSON.stringify({ status }) },
+      connectionId
+    )
+    return { ok: true, requested: Boolean(data?.requested), message: data?.message ?? null }
   } catch (error) {
     console.error('Erro ao atualizar pedido:', error)
-    return false
+    return { ok: false, error: error instanceof Error ? error.message : 'Erro ao atualizar o pedido' }
+  }
+})
+
+ipcMain.handle('get-ifood-cancel-reasons', async (_e, orderId: string, connectionId?: string) => {
+  try {
+    const data = await desktopRequest<{ reasons: { code: string; description: string }[] }>(
+      `/api/desktop/orders/${encodeURIComponent(orderId)}/cancelar`,
+      {},
+      connectionId
+    )
+    return { ok: true, reasons: data.reasons ?? [] }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Erro ao carregar motivos' }
+  }
+})
+
+ipcMain.handle('request-ifood-cancel', async (_e, orderId: string, code: string, description: string, connectionId?: string) => {
+  try {
+    await desktopRequest(`/api/desktop/orders/${encodeURIComponent(orderId)}/cancelar`, {
+      method: 'POST',
+      body: JSON.stringify({ code, description }),
+    }, connectionId)
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'O iFood recusou o cancelamento' }
+  }
+})
+
+ipcMain.handle('get-store-pause-state', async (_e, connectionId?: string) => {
+  try {
+    return { ok: true, ...(await desktopRequest('/api/desktop/pausa', {}, connectionId) as object) }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Erro ao consultar a loja' }
+  }
+})
+
+ipcMain.handle('set-store-pause', async (_e, body: Record<string, unknown>, connectionId?: string) => {
+  try {
+    await desktopRequest('/api/desktop/pausa', { method: 'POST', body: JSON.stringify(body) }, connectionId)
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Não foi possível concluir' }
   }
 })
 

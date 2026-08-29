@@ -12,8 +12,29 @@ const EMPTY_CONFIG: DesktopConfig = {
   apiBaseUrl: '',
   desktopApiKeyConfigured: false,
   printerName: '',
+  printerWidth: '58',
   autoPrint: 'true',
   autoStart: 'true',
+}
+
+/** Pedido de mentira só para conferir a saída da impressora. */
+const PEDIDO_TESTE = {
+  id: 'teste-0000-0000-0000-000000000000',
+  channel: 'web',
+  order_number: 1,
+  stores: { store_number: 1 },
+  created_at: new Date().toISOString(),
+  customer_name: 'Cliente Teste',
+  customer_phone: '(11) 99999-9999',
+  fulfillment_type: 'delivery',
+  address: 'Rua de Teste', address_number: '123', address_complement: 'ap. 1',
+  neighborhood: 'Centro', city: 'Cidade', state: 'SP',
+  subtotal_cents: 3500, delivery_fee_cents: 500, total_cents: 4000,
+  payment_method: 'pix', change_for_cents: null, notes: 'Teste de impressão',
+  order_items: [
+    { id: '1', product_name: 'X-Salada', quantity: 1, subtotal_cents: 2500, notes: 'sem cebola', addon_selections: [{ groupName: 'Extras', selectedOptions: [{ name: 'Bacon', price_cents: 500 }] }] },
+    { id: '2', product_name: 'Refrigerante', quantity: 1, subtotal_cents: 1000, notes: null, addon_selections: [] },
+  ],
 }
 
 export function Settings({ onSaved }: Props) {
@@ -68,6 +89,7 @@ export function Settings({ onSaved }: Props) {
     setError('')
     const input: DesktopConfigInput = {
       printerName: config.printerName,
+      printerWidth: config.printerWidth,
       autoPrint: config.autoPrint,
       autoStart: config.autoStart,
     }
@@ -79,6 +101,15 @@ export function Settings({ onSaved }: Props) {
     } catch (saveError) {
       setError(`Erro ao salvar: ${saveError instanceof Error ? saveError.message : String(saveError)}`)
     }
+  }
+
+  async function testarImpressao() {
+    // Salva a largura escolhida antes, senão o teste sai com a anterior.
+    await window.api.saveConfig({ printerName: config.printerName, printerWidth: config.printerWidth })
+    const resultado = await window.api.printOrder(PEDIDO_TESTE as never)
+    if (resultado === 'no-printer') setError('Selecione uma impressora primeiro.')
+    else if (resultado === 'error') setError('Não foi possível imprimir o teste.')
+    else setError('')
   }
 
   const toggle = (key: 'autoPrint' | 'autoStart', label: string, description: string) => (
@@ -220,7 +251,27 @@ export function Settings({ onSaved }: Props) {
             />
           )}
         </div>
+        <div>
+          <label className="block text-xs text-[var(--text-muted)] mb-1 font-medium" htmlFor="printer-width">Largura do papel</label>
+          <select
+            id="printer-width"
+            value={config.printerWidth}
+            onChange={event => update('printerWidth', event.target.value)}
+            className="w-full bg-[var(--card)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-sm text-[var(--text)] focus:outline-none focus:border-[var(--primary)]"
+          >
+            <option value="58">58 mm (32 colunas) — padrão</option>
+            <option value="80">80 mm (48 colunas)</option>
+          </select>
+        </div>
         {toggle('autoPrint', 'Impressão automática', 'Imprime a comanda quando o polling encontrar um novo pedido.')}
+        <button
+          type="button"
+          onClick={testarImpressao}
+          disabled={!config.printerName}
+          className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] text-[var(--text-muted)] transition-colors disabled:opacity-40"
+        >
+          <Printer size={12} /> Testar impressão
+        </button>
       </section>
 
       <section className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-4 space-y-3 shadow-[var(--shadow-sm)]">

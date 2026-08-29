@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { History, LayoutGrid, Maximize2, MessageCircle, Minimize2, Minus, Printer, RefreshCw, Settings as SettingsIcon, WifiOff, X } from 'lucide-react'
+import { History, LayoutGrid, Maximize2, MessageCircle, Minimize2, Minus, Power, Printer, RefreshCw, Settings as SettingsIcon, WifiOff, X } from 'lucide-react'
 import { OrderCard } from './components/OrderCard'
 import { Settings } from './components/Settings'
 import { WhatsappPanel } from './components/WhatsappPanel'
+import { CancelIfoodDialog } from './components/CancelIfoodDialog'
+import { StorePausePanel } from './components/StorePausePanel'
 import { CapivaraMark } from './components/CapivaraMark'
 import { KANBAN_COLUMNS, STATUS_LABELS, type Order, type OrderStatus } from './types'
+import { orderLabel } from './orderLabel'
 import type { WhatsappStatusConversation } from './electron-api'
 import { loadNotificationSounds, playMessageAlert, playOrderAlert } from './notification-sound'
 
 type Tab = 'kanban' | 'historico' | 'whatsapp' | 'settings'
 const ALL_STATUSES: OrderStatus[] = [
-  'pending', 'awaiting_payment', 'paid', 'preparing', 'out_for_delivery', 'delivered', 'cancelled'
+  'pending', 'awaiting_payment', 'paid', 'preparing', 'ready_to_pickup', 'out_for_delivery', 'delivered', 'cancelled'
 ]
 const HISTORY_PAGE_SIZE = 30
 
@@ -81,8 +84,8 @@ export default function App() {
 
       for (const order of newOrders) {
         const isPickup = order.fulfillment_type === 'pickup'
-        const viaWhatsapp = order.channel === 'whatsapp'
-        addNotification(`${isPickup ? 'RETIRADA — ' : ''}${viaWhatsapp ? 'WhatsApp — ' : ''}Novo pedido #${order.id.slice(0, 8).toUpperCase()} — ${order.customer_name}`)
+        const origem = order.channel === 'ifood' ? 'iFood — ' : order.channel === 'whatsapp' ? 'WhatsApp — ' : ''
+        addNotification(`${isPickup ? 'RETIRADA — ' : ''}${origem}Novo pedido #${orderLabel(order)} — ${order.customer_name}`)
         if (autoPrintRef.current) {
           const result = await window.api.printOrder(order)
           if (result === 'no-printer') addNotification('Configure uma impressora para ativar a impressão automática')
@@ -271,13 +274,22 @@ export default function App() {
     // um pedido da segunda loja iria para o servidor da primeira — que
     // responderia "não encontrado", ou acertaria outro pedido por acaso.
     const alvo = orders.find(o => o.id === id)
-    const updated = await window.api.updateOrderStatus(id, status, alvo?.connectionId)
-    if (updated) {
-      setOrders(previous => previous.map(order => order.id === id ? { ...order, status } : order))
-    } else {
-      addNotification('Não foi possível atualizar o status do pedido')
+    const res = await window.api.updateOrderStatus(id, status, alvo?.connectionId)
+    if (!res.ok) {
+      addNotification(res.error || 'Não foi possível atualizar o status do pedido')
+      return
     }
+    if (res.requested) {
+      // Pedido do iFood: pedimos a ação; o card anda quando o evento voltar no
+      // próximo ciclo de polling, não agora.
+      addNotification(res.message || 'Enviado ao iFood')
+      return
+    }
+    setOrders(previous => previous.map(order => order.id === id ? { ...order, status } : order))
   }
+
+  const [cancelandoIfood, setCancelandoIfood] = useState<Order | null>(null)
+  const [pausePanelOpen, setPausePanelOpen] = useState(false)
 
   async function printOrder(order: Order) {
     const result = await window.api.printOrder(order)
@@ -374,6 +386,13 @@ export default function App() {
                 className={`p-1.5 rounded-lg transition-colors ${autoPrint ? 'text-[var(--success)] hover:bg-green-500/10' : 'text-[var(--text-xmuted)] hover:bg-[var(--border-light)]'}`}
               >
                 <Printer size={14} />
+              </button>
+              <button
+                onClick={() => setPausePanelOpen(v => !v)}
+                title="Pausar loja (cardápio próprio / iFood)"
+                className={`p-1.5 rounded-lg transition-colors ${pausePanelOpen ? 'text-[var(--primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--border-light)]'}`}
+              >
+                <Power size={14} />
               </button>
             </>
           )}
@@ -527,7 +546,7 @@ export default function App() {
               <>
                 <div className="space-y-2">
                   {historyOrders.map(order => (
-                    <OrderCard key={order.id} order={order} onStatus={updateStatus} onPrint={printOrder} />
+                    <OrderCard key={order.id} order={order} onStatus={updateStatus} onPrint={printOrder} onCancelIfood={setCancelandoIfood} />
                   ))}
                 </div>
                 {historyHasMore && (
@@ -556,11 +575,11 @@ export default function App() {
         )}
 
         {tab === 'kanban' && configured && (
-          <div className="h-full flex gap-0">
+          <div className="h-full flex gap-0 overflow-x-auto">
             {KANBAN_COLUMNS.map(column => {
               const columnOrders = orders.filter(order => column.statuses.includes(order.status))
               return (
-                <div key={column.id} className="flex-1 flex flex-col min-w-0 border-r border-[var(--border)] last:border-0">
+                <div key={column.id} className="flex-1 min-w-[168px] flex flex-col border-r border-[var(--border)] last:border-0">
                   <div className="px-3 py-2.5 border-b-2 flex items-center justify-between flex-shrink-0" style={{ borderBottomColor: column.accent }}>
                     <span className="font-bold text-sm" style={{ color: column.accent }}>{column.label}</span>
                     {columnOrders.length > 0 && <span className="text-[11px] font-bold rounded-full w-5 h-5 flex items-center justify-center" style={{ background: `${column.accent}22`, color: column.accent }}>{columnOrders.length}</span>}
@@ -574,6 +593,7 @@ export default function App() {
                         order={order}
                         onStatus={updateStatus}
                         onPrint={printOrder}
+                        onCancelIfood={setCancelandoIfood}
                         onOpen={() => ackOrder(order.id)}
                         compact
                       />
@@ -585,6 +605,24 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {pausePanelOpen && (
+        <StorePausePanel
+          stores={stores.map(s => ({ id: s.id, storeName: s.storeName }))}
+          onClose={() => setPausePanelOpen(false)}
+          notify={addNotification}
+        />
+      )}
+
+      {cancelandoIfood && (
+        <CancelIfoodDialog
+          orderId={cancelandoIfood.id}
+          connectionId={cancelandoIfood.connectionId}
+          onClose={() => setCancelandoIfood(null)}
+          onRequested={() => void loadOrders()}
+          notify={addNotification}
+        />
+      )}
     </div>
   )
 }

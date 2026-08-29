@@ -5,6 +5,8 @@ export interface DesktopConfig {
   apiBaseUrl: string
   desktopApiKeyConfigured: boolean
   printerName: string
+  /** '58' (32 colunas) ou '80' (48 colunas). */
+  printerWidth: string
   autoPrint: string
   autoStart: string
 }
@@ -16,9 +18,31 @@ export interface NotificationSoundsResponse {
 
 export interface DesktopConfigInput {
   printerName?: string
+  printerWidth?: string
   autoPrint?: string
   autoStart?: string
 }
+
+export interface IfoodCancelReason {
+  code: string
+  description: string
+}
+
+export interface StorePauseState {
+  ok: boolean
+  error?: string
+  loja?: { aberta: boolean }
+  ifood?: {
+    conectada: boolean
+    pausada: boolean
+    pausadaAte: string | null
+    recebendo: boolean | null
+  }
+}
+
+export type UpdateStatusResult =
+  | { ok: true; requested: boolean; message: string | null }
+  | { ok: false; error: string }
 
 export interface PrinterInfo {
   name: string
@@ -76,8 +100,12 @@ declare global {
       printOrder: (order: Order) => Promise<'ok' | 'no-printer' | 'error'>
       fetchOrders: () => Promise<Order[]>
       fetchOrderHistory: (opts: { limit: number; offset: number; status?: OrderStatus | '' }) => Promise<Order[]>
-      updateOrderStatus: (id: string, status: OrderStatus, connectionId?: string) => Promise<boolean>
+      updateOrderStatus: (id: string, status: OrderStatus, connectionId?: string) => Promise<UpdateStatusResult>
       acknowledgeOrder: (id: string, connectionId?: string) => Promise<boolean>
+      getIfoodCancelReasons: (id: string, connectionId?: string) => Promise<{ ok: boolean; reasons?: IfoodCancelReason[]; error?: string }>
+      requestIfoodCancel: (id: string, code: string, description: string, connectionId?: string) => Promise<{ ok: boolean; error?: string }>
+      getStorePauseState: (connectionId?: string) => Promise<StorePauseState>
+      setStorePause: (body: { alvo: 'loja' | 'ifood'; acao: 'pausar' | 'retomar'; minutos?: number }, connectionId?: string) => Promise<{ ok: boolean; error?: string }>
       onPrintError: (callback: (error: string) => void) => () => void
       getStores: () => Promise<{ id: string; storeName: string | null; online: boolean }[]>
       addConnection: (url: string, token: string) => Promise<{ erro?: string }>

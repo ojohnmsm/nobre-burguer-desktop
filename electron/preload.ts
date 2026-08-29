@@ -9,6 +9,10 @@ contextBridge.exposeInMainWorld('api', {
   fetchOrderHistory: (opts: unknown)                   => ipcRenderer.invoke('fetch-order-history', opts),
   updateOrderStatus: (id: string, status: string, connectionId?: string) => ipcRenderer.invoke('update-order-status', id, status, connectionId),
   acknowledgeOrder:  (id: string, connectionId?: string) => ipcRenderer.invoke('acknowledge-order', id, connectionId),
+  getIfoodCancelReasons: (id: string, connectionId?: string) => ipcRenderer.invoke('get-ifood-cancel-reasons', id, connectionId),
+  requestIfoodCancel: (id: string, code: string, description: string, connectionId?: string) => ipcRenderer.invoke('request-ifood-cancel', id, code, description, connectionId),
+  getStorePauseState: (connectionId?: string) => ipcRenderer.invoke('get-store-pause-state', connectionId),
+  setStorePause: (body: unknown, connectionId?: string) => ipcRenderer.invoke('set-store-pause', body, connectionId),
   onPrintError:      (cb: (err: string) => void) => {
     ipcRenderer.on('print-error', (_e, err) => cb(err))
     return () => ipcRenderer.removeAllListeners('print-error')
