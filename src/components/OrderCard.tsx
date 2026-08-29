@@ -86,8 +86,10 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
           </div>
             <p className="font-semibold text-sm text-[var(--text)] truncate">{order.customer_name}</p>
             <p className="text-xs text-[var(--text-muted)] mt-0.5">
-            {!compact && <>{order.order_items.length} {order.order_items.length === 1 ? 'item' : 'itens'} · </>}
-            {PAYMENT_LABELS[order.payment_method] || order.payment_method}
+            {!compact && <>{order.order_items.length} {order.order_items.length === 1 ? 'item' : 'itens'}</>}
+            {/* Pedido do iFood é sempre "pago no iFood" — a linha de pagamento
+                só polui o card. */}
+            {!isIfood && <>{!compact && ' · '}{PAYMENT_LABELS[order.payment_method] || order.payment_method}</>}
           </p>
           {order.notes && (
             <p className="text-xs text-[var(--primary)] mt-0.5 flex items-center gap-1 truncate">

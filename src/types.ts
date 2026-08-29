@@ -73,12 +73,14 @@ export const STATUS_LABELS: Record<OrderStatus, string> = {
 }
 
 export const PAYMENT_LABELS: Record<string, string> = {
-  pix:          'Pix',
-  cash:         'Dinheiro',
-  credit_card:  'Crédito',
-  debit_card:   'Débito',
-  meal_voucher: 'Vale Ref.',
-  food_voucher: 'Vale Alim.',
+  pix:              'Pix',
+  cash:             'Dinheiro',
+  credit_card:      'Crédito',
+  debit_card:       'Débito',
+  meal_voucher:     'Vale Ref.',
+  food_voucher:     'Vale Alim.',
+  ifood_online:     'Pago no iFood',
+  card_on_delivery: 'Cartão na entrega',
 }
 
 export const KANBAN_COLUMNS: { id: string; label: string; statuses: OrderStatus[]; accent: string }[] = [

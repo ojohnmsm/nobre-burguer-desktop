@@ -263,6 +263,8 @@ interface DesktopConfigInput {
   /** '58' (32 colunas) ou '80' (48 colunas). */
   printerWidth?: string
   autoPrint?: string
+  /** 'all' | 'own' | 'ifood' — quais canais a impressão automática imprime. */
+  autoPrintChannels?: string
   autoStart?: string
 }
 
@@ -283,6 +285,7 @@ function getConfigView() {
     printerName: config.printerName || '',
     printerWidth: config.printerWidth || '58',
     autoPrint: config.autoPrint || 'true',
+    autoPrintChannels: config.autoPrintChannels || 'all',
     autoStart: config.autoStart || 'true',
   }
 }
@@ -301,6 +304,7 @@ function saveConfigInput(input: DesktopConfigInput) {
     printerName: input.printerName ?? current.printerName ?? '',
     printerWidth: input.printerWidth ?? current.printerWidth ?? '58',
     autoPrint: input.autoPrint ?? current.autoPrint ?? 'true',
+    autoPrintChannels: input.autoPrintChannels ?? current.autoPrintChannels ?? 'all',
     autoStart: input.autoStart ?? current.autoStart ?? 'true',
   }
   saveConfig(next)
@@ -463,6 +467,7 @@ function buildReceiptHtml(order: Record<string, unknown>, widthCols: 32 | 48): s
   const PAYMENT_LABELS: Record<string, string> = {
     pix: 'Pix', cash: 'Dinheiro', credit_card: 'Cr&eacute;dito',
     debit_card: 'D&eacute;bito', meal_voucher: 'Vale Ref.', food_voucher: 'Vale Alim.',
+    ifood_online: 'Pago no iFood', card_on_delivery: 'Cart&atilde;o na entrega',
   }
 
   const date = new Date(order.created_at as string).toLocaleString('pt-BR', {

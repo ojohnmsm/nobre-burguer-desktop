@@ -8,6 +8,8 @@ export interface DesktopConfig {
   /** '58' (32 colunas) ou '80' (48 colunas). */
   printerWidth: string
   autoPrint: string
+  /** 'all' | 'own' | 'ifood' — quais canais a impressão automática imprime. */
+  autoPrintChannels: string
   autoStart: string
 }
 
@@ -20,6 +22,7 @@ export interface DesktopConfigInput {
   printerName?: string
   printerWidth?: string
   autoPrint?: string
+  autoPrintChannels?: string
   autoStart?: string
 }
 

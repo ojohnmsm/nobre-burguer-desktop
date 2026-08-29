@@ -23,6 +23,19 @@ function isOperationalOrder(order: Order): boolean {
   return order.status !== 'awaiting_payment'
 }
 
+/**
+ * A impressão automática deve imprimir este pedido, dado o filtro de canal?
+ *
+ * 'all' imprime tudo; 'own' só site/WhatsApp; 'ifood' só iFood. Serve para a
+ * loja que já usa o Gestor de Pedidos do iFood (que imprime a comanda dele) e
+ * não quer a comanda duplicada aqui — ou o contrário.
+ */
+function deveImprimir(channel: string, filtro: string): boolean {
+  if (filtro === 'ifood') return channel === 'ifood'
+  if (filtro === 'own') return channel !== 'ifood'
+  return true
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>('kanban')
   const [stores, setStores] = useState<{ id: string; storeName: string | null; online: boolean }[]>([])
@@ -36,8 +49,7 @@ export default function App() {
   const knownOrderIdsRef = useRef<Set<string>>(new Set())
   const hasLoadedOrdersRef = useRef(false)
   const autoPrintRef = useRef(true)
-  const orderSoundIntervalRef = useRef<number | null>(null)
-  const messageSoundIntervalRef = useRef<number | null>(null)
+  const autoPrintChannelsRef = useRef<string>('all')
   const [windowMaximized, setWindowMaximized] = useState(false)
 
   // ── Pedidos novos não vistos (abrir o card reconhece) ──────────────────────
@@ -82,11 +94,14 @@ export default function App() {
       knownOrderIdsRef.current = new Set(operationalOrders.map(order => order.id))
       hasLoadedOrdersRef.current = true
 
+      // Toca UMA vez quando chega pedido novo — não em laço até reconhecer.
+      if (newOrders.length > 0) playOrderAlert()
+
       for (const order of newOrders) {
         const isPickup = order.fulfillment_type === 'pickup'
         const origem = order.channel === 'ifood' ? 'iFood — ' : order.channel === 'whatsapp' ? 'WhatsApp — ' : ''
         addNotification(`${isPickup ? 'RETIRADA — ' : ''}${origem}Novo pedido #${orderLabel(order)} — ${order.customer_name}`)
-        if (autoPrintRef.current) {
+        if (autoPrintRef.current && deveImprimir(order.channel, autoPrintChannelsRef.current)) {
           const result = await window.api.printOrder(order)
           if (result === 'no-printer') addNotification('Configure uma impressora para ativar a impressão automática')
         }
@@ -107,6 +122,7 @@ export default function App() {
     setConfigured(ready)
     setAutoPrint(config.autoPrint !== 'false')
     autoPrintRef.current = config.autoPrint !== 'false'
+    autoPrintChannelsRef.current = config.autoPrintChannels || 'all'
 
     // Os nomes das lojas vêm junto: sem servidor configurado não há a quem
     // perguntar, e com ele configurado a resposta muda se o código for trocado.
@@ -190,45 +206,13 @@ export default function App() {
   const whatsappDisconnected = connectionState !== null && connectionState !== 'open'
   const hasUrgentAlert = unacknowledgedOrders.length > 0 || conversationsNeedingAttention.length > 0 || whatsappDisconnected
 
-  // Dois alertas sonoros independentes — pedido novo tem um timbre, mensagem
-  // de cliente (ou WhatsApp desconectado) tem outro.
-  const hasOrderAlert = unacknowledgedOrders.length > 0
+  // Alerta sonoro toca UMA vez quando aparece, não em laço até reconhecer. O
+  // som do pedido dispara em loadOrders() a cada pedido novo; o de mensagem,
+  // aqui, na transição para "precisa de atenção".
   const hasMessageAlert = conversationsNeedingAttention.length > 0 || whatsappDisconnected
 
   useEffect(() => {
-    if (!hasOrderAlert) {
-      if (orderSoundIntervalRef.current !== null) {
-        window.clearInterval(orderSoundIntervalRef.current)
-        orderSoundIntervalRef.current = null
-      }
-      return
-    }
-    playOrderAlert()
-    orderSoundIntervalRef.current = window.setInterval(() => { playOrderAlert() }, 12000)
-    return () => {
-      if (orderSoundIntervalRef.current !== null) {
-        window.clearInterval(orderSoundIntervalRef.current)
-        orderSoundIntervalRef.current = null
-      }
-    }
-  }, [hasOrderAlert])
-
-  useEffect(() => {
-    if (!hasMessageAlert) {
-      if (messageSoundIntervalRef.current !== null) {
-        window.clearInterval(messageSoundIntervalRef.current)
-        messageSoundIntervalRef.current = null
-      }
-      return
-    }
-    playMessageAlert()
-    messageSoundIntervalRef.current = window.setInterval(() => { playMessageAlert() }, 12000)
-    return () => {
-      if (messageSoundIntervalRef.current !== null) {
-        window.clearInterval(messageSoundIntervalRef.current)
-        messageSoundIntervalRef.current = null
-      }
-    }
+    if (hasMessageAlert) playMessageAlert()
   }, [hasMessageAlert])
 
   const loadWhatsappStatus = useCallback(async () => {
