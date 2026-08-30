@@ -493,8 +493,9 @@ function buildReceiptHtml(order: Record<string, unknown>, widthCols: 32 | 48): s
     const addons = ((item.addon_selections as { groupName: string; selectedOptions: { name: string }[] }[]) || [])
       .map(a => `<tr><td colspan="2" class="sm" style="padding-left:2mm">+ ${a.selectedOptions.map(o => h(o.name)).join(', ')}</td></tr>`)
       .join('')
+    const tam = item.variation_name ? ` · ${h(item.variation_name as string)}` : ''
     return `<tr>
-      <td>${item.quantity}x ${h(item.product_name)}</td>
+      <td>${item.quantity}x ${h(item.product_name)}${tam}</td>
       <td class="r">${R(item.subtotal_cents as number)}</td>
     </tr>${addons}`
   }).join('')

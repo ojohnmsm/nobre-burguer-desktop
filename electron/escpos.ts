@@ -160,7 +160,8 @@ export function buildReceiptEscPos(order: ReceiptOrder, width: 32 | 48 = 32): Bu
   out.push(line(div))
 
   for (const item of items) {
-    const nomeItem = `${item.quantity}x ${ascii(item.product_name)}`
+    const tam = item.variation_name ? ` ${ascii(item.variation_name as string)}` : ''
+    const nomeItem = `${item.quantity}x ${ascii(item.product_name)}${tam}`
     const preco = R(item.subtotal_cents as number)
     if (nomeItem.length + preco.length + 1 <= width) {
       out.push(line(row(nomeItem, preco)))

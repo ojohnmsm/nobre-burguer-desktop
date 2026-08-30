@@ -171,7 +171,7 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
             {order.order_items.map(item => (
               <div key={item.id}>
                 <div className="flex justify-between">
-                  <span className="text-[var(--text)]">{item.quantity}× {item.product_name}</span>
+                  <span className="text-[var(--text)]">{item.quantity}× {item.product_name}{item.variation_name ? ` · ${item.variation_name}` : ''}</span>
                   <span className="text-[var(--text-muted)]">{fmtMoney(item.subtotal_cents)}</span>
                 </div>
                 {item.addon_selections?.map((a, i) => (

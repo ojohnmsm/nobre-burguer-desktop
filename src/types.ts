@@ -11,6 +11,8 @@ export interface AddonSelection {
 export interface OrderItem {
   id: string
   product_name: string
+  /** Tamanho/variação escolhida. Nulo em item sem variação. */
+  variation_name: string | null
   quantity: number
   subtotal_cents: number
   notes: string | null
