@@ -9,6 +9,7 @@ import { DisputasPanel } from './components/DisputasPanel'
 import { CapivaraMark } from './components/CapivaraMark'
 import { KANBAN_COLUMNS, STATUS_LABELS, type Order, type OrderStatus } from './types'
 import { rankStatus } from './orderFlow'
+import { compararFilaCozinha } from './orderTiming'
 import type { WhatsappStatusConversation } from './electron-api'
 import { loadNotificationSounds, playDriverArrivedAlert, playMessageAlert, playOrderAlert } from './notification-sound'
 
@@ -623,7 +624,12 @@ export default function App() {
         {tab === 'kanban' && configured && (
           <div className="h-full flex gap-0 overflow-x-auto">
             {KANBAN_COLUMNS.map(column => {
-              const columnOrders = orders.filter(order => column.statuses.includes(order.status))
+              // A coluna é uma fila: pendência no topo, depois urgência
+              // (vermelho → amarelo → verde), depois o mais velho. `.filter`
+              // devolve array novo, então o `.sort` não mexe em `orders`.
+              const columnOrders = orders
+                .filter(order => column.statuses.includes(order.status))
+                .sort((a, b) => compararFilaCozinha(a, b))
               return (
                 <div key={column.id} className="flex-1 min-w-[168px] flex flex-col border-r border-[var(--border)] last:border-0">
                   <div className="px-3 py-2.5 border-b-2 flex items-center justify-between flex-shrink-0" style={{ borderBottomColor: column.accent }}>

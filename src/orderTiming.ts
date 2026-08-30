@@ -95,6 +95,46 @@ export function nivelUrgencia(
   return info.restanteMin <= metade ? 'aquecendo' : 'fresca'
 }
 
+interface FilaOrder extends TimingOrder {
+  acknowledged_at?: string | null
+  prep_target_minutes?: number | null
+}
+
+const PESO_URGENCIA: Record<NivelUrgencia, number> = { atrasada: 0, aquecendo: 1, fresca: 2 }
+
+/**
+ * Ordem dos cartões DENTRO de uma coluna do kanban — a fila que a cozinha
+ * ataca de cima para baixo:
+ *
+ *   1. Pendência primeiro — cartão ainda não reconhecido (ninguém abriu).
+ *   2. Urgência — atrasada → aquecendo → fresca → sem prazo.
+ *   3. Mais velho primeiro.
+ *
+ * A coluna "Concluído" (pedidos terminais) é a exceção: ali o que terminou por
+ * último fica no topo, para conferir rápido o que acabou de sair.
+ *
+ * Comparador para o `.sort()` da lista já filtrada por coluna.
+ */
+export function compararFilaCozinha(a: FilaOrder, b: FilaOrder, agora: number = Date.now()): number {
+  const termA = a.status === 'delivered' || a.status === 'cancelled'
+  const termB = b.status === 'delivered' || b.status === 'cancelled'
+  if (termA && termB) {
+    return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+  }
+
+  const pendA = a.acknowledged_at ? 1 : 0
+  const pendB = b.acknowledged_at ? 1 : 0
+  if (pendA !== pendB) return pendA - pendB
+
+  const nA = nivelUrgencia(a, a.prep_target_minutes ?? 0, agora)
+  const nB = nivelUrgencia(b, b.prep_target_minutes ?? 0, agora)
+  const urgA = nA ? PESO_URGENCIA[nA] : 3
+  const urgB = nB ? PESO_URGENCIA[nB] : 3
+  if (urgA !== urgB) return urgA - urgB
+
+  return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+}
+
 const ICONE_VEICULO: Record<string, string> = {
   BICYCLE: '🚴', MOTORBIKE: '🏍️', MOTORCYCLE: '🏍️', CAR: '🚗', WALKER: '🚶', VAN: '🚐',
 }
