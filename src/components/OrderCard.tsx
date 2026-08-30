@@ -3,7 +3,7 @@ import { ChevronDown, ChevronUp, Printer, Clock, Phone, MapPin, MessageSquare } 
 import { Order, OrderStatus, STATUS_LABELS, PAYMENT_LABELS, fmtMoney, timeAgo } from '../types'
 import { orderLabel } from '../orderLabel'
 import { origemDoPedido, proximaEtapa } from '../orderFlow'
-import { horaLocal, iconeVeiculo, preparoInfo, textoEntregador } from '../orderTiming'
+import { horaLocal, iconeVeiculo, nivelUrgencia, preparoInfo, textoEntregador } from '../orderTiming'
 
 const STATUS_COLORS: Record<OrderStatus, string> = {
   pending:          'text-[var(--text-muted)] border-[var(--border)]',
@@ -35,11 +35,25 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
   const ago = timeAgo(order.created_at, fim)
   const isOld = !isTerminal && (fim - new Date(order.created_at).getTime()) > 30 * 60000
   const preparo = preparoInfo(order, order.prep_target_minutes ?? 0)
+  const urgencia = nivelUrgencia(order, order.prep_target_minutes ?? 0)
   const driver = order.ifood_driver ?? null
   const proxima = proximaEtapa(order)
   const isPickup = order.fulfillment_type === 'pickup'
   const pickupAddress = order.pickup_address?.trim()
   const origem = origemDoPedido(order.channel)
+
+  // A cor do cartão inteiro segue o TEMPO, não o canal: faixa lateral sempre
+  // (verde → amarelo → vermelho) e um leve fundo vermelho quando já atrasou.
+  const urgenciaCard =
+    urgencia === 'atrasada'   ? 'border-red-400 border-l-4 border-l-red-500 bg-red-500/10'
+    : urgencia === 'aquecendo' ? 'border-[var(--border)] border-l-4 border-l-amber-500 bg-[var(--card)]'
+    : urgencia === 'fresca'    ? 'border-[var(--border)] border-l-4 border-l-green-500 bg-[var(--card)]'
+    : 'border-[var(--border)] bg-[var(--card)]'
+  const urgenciaTexto =
+    urgencia === 'atrasada'   ? 'text-[var(--danger)] font-bold'
+    : urgencia === 'aquecendo' ? 'text-amber-600'
+    : urgencia === 'fresca'    ? 'text-green-600'
+    : isOld ? 'text-[var(--danger)]' : 'text-[var(--text-muted)]'
 
   function handleCancel() {
     if (isIfood) { onCancelIfood?.(order); return }
@@ -47,7 +61,7 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
   }
 
   return (
-    <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl overflow-hidden select-none shadow-[var(--shadow-sm)]">
+    <div className={`border rounded-xl overflow-hidden select-none shadow-[var(--shadow-sm)] ${urgenciaCard}`}>
       {/* Card header */}
       <button
         className="w-full p-3 flex items-start gap-2 text-left hover:bg-[var(--border-light)] transition-colors"
@@ -58,19 +72,34 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
         })}
       >
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-            <span className="font-mono font-bold text-xs text-[var(--text)]">
-              #{orderLabel(order)}
+          {/* Linha 1: o NÚMERO, grande e sozinho — a âncora de toda conversa
+              (cliente, entregador, app do iFood). A idade fica ao lado, na cor
+              da urgência; o valor saiu daqui e vive no cartão expandido. */}
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="font-mono font-bold text-xl leading-tight tracking-tight text-[var(--text)] truncate">
+              {orderLabel(order)}
             </span>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded font-black tracking-wide ${
-              origem.tom === 'ifood' ? 'bg-red-500 text-white'
-              : origem.tom === 'whatsapp' ? 'bg-green-500 text-black'
-              : 'bg-[var(--border-light)] text-[var(--text-muted)]'
+            <span className={`text-xs flex items-center gap-0.5 flex-shrink-0 tabular-nums ${urgenciaTexto}`}>
+              <Clock size={11} />{isTerminal ? `total ${ago}` : ago}
+            </span>
+          </div>
+          {/* Linha 2: modalidade (fixa e forte — muda o que a cozinha faz),
+              canal em tom discreto, etiqueta da loja quando há mais de uma, e o
+              status só na visão lista (no kanban a coluna já diz a etapa). */}
+          <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+            <span className={`text-[10px] px-2 py-0.5 rounded-sm font-black tracking-wide ${
+              isPickup
+                ? 'bg-amber-400 text-black shadow-[0_0_0_1px_rgba(251,191,36,.45)]'
+                : 'border border-[var(--text-muted)] text-[var(--text-muted)]'
+            }`}>
+              {isPickup ? 'RETIRADA' : 'ENTREGA'}
+            </span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-sm font-bold tracking-wide border ${
+              origem.tom === 'ifood' ? 'border-red-500/50 text-red-600'
+              : origem.tom === 'whatsapp' ? 'border-green-500/50 text-green-700'
+              : 'border-[var(--border)] text-[var(--text-muted)]'
             }`}>
               {origem.label.toUpperCase()}
-            </span>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${STATUS_COLORS[order.status]}`}>
-              {STATUS_LABELS[order.status]}
             </span>
             {/* A etiqueta da loja só aparece quando o computador atende mais de
                 uma — com uma só, ela repetiria em todo cartão sem informar
@@ -84,14 +113,14 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
                 {order.storeLabel}
               </span>
             )}
-            {isPickup && (
-              <span className="text-[10px] px-2 py-0.5 bg-amber-400 text-black font-black tracking-wide shadow-[0_0_0_1px_rgba(251,191,36,.45)]">
-                RETIRADA
+            {!compact && (
+              <span className={`text-[10px] px-1.5 py-0.5 rounded border ${STATUS_COLORS[order.status]}`}>
+                {STATUS_LABELS[order.status]}
               </span>
             )}
           </div>
-            <p className="font-semibold text-sm text-[var(--text)] truncate">{order.customer_name}</p>
-            <p className="text-xs text-[var(--text-muted)] mt-0.5">
+          <p className="font-semibold text-sm text-[var(--text)] truncate mt-1">{order.customer_name}</p>
+          <p className="text-xs text-[var(--text-muted)] mt-0.5">
             {!compact && <>{order.order_items.length} {order.order_items.length === 1 ? 'item' : 'itens'}</>}
             {/* Pedido do iFood é sempre "pago no iFood" — a linha de pagamento
                 só polui o card. */}
@@ -125,11 +154,7 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
             </p>
           )}
         </div>
-        <div className="flex flex-col items-end gap-1 flex-shrink-0">
-          <span className="text-[var(--primary)] font-bold text-sm">{fmtMoney(order.total_cents)}</span>
-          <span className={`text-[10px] flex items-center gap-0.5 ${isOld ? 'text-[var(--danger)]' : 'text-[var(--text-muted)]'}`}>
-            <Clock size={9} />{isTerminal ? `total ${ago}` : ago}
-          </span>
+        <div className="flex flex-col items-end flex-shrink-0 pt-1">
           {open ? <ChevronUp size={12} className="text-[var(--text-xmuted)]" /> : <ChevronDown size={12} className="text-[var(--text-xmuted)]" />}
         </div>
       </button>

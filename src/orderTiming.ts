@@ -68,6 +68,33 @@ export function preparoInfo(
   return { terminal: false, totalMin: null, alvoISO, restanteMin, atrasado: restanteMin < 0 }
 }
 
+export type NivelUrgencia = 'fresca' | 'aquecendo' | 'atrasada'
+
+/**
+ * Nível de urgência do pedido, para a COR do cartão (faixa lateral + fundo).
+ * Sai do mesmo prazo de preparo da contagem regressiva:
+ *
+ *   atrasado                    → 'atrasada'   (vermelho)
+ *   resta ≤ metade da janela    → 'aquecendo'  (amarelo)  — a regra do iFood
+ *   resta  > metade da janela   → 'fresca'     (verde)
+ *
+ * `null` quando não há prazo: pedido terminal, fora do preparo, ou pedido
+ * próprio sem "meta de preparo" configurada. Nesse caso o cartão fica neutro.
+ */
+export function nivelUrgencia(
+  order: TimingOrder,
+  prepTargetMinutes: number,
+  agora: number = Date.now()
+): NivelUrgencia | null {
+  const info = preparoInfo(order, prepTargetMinutes, agora)
+  if (info.terminal || !info.alvoISO || info.restanteMin == null) return null
+  if (info.atrasado) return 'atrasada'
+
+  const janelaMin = (new Date(info.alvoISO).getTime() - new Date(order.created_at).getTime()) / 60000
+  const metade = janelaMin > 0 ? janelaMin / 2 : 10
+  return info.restanteMin <= metade ? 'aquecendo' : 'fresca'
+}
+
 const ICONE_VEICULO: Record<string, string> = {
   BICYCLE: '🚴', MOTORBIKE: '🏍️', MOTORCYCLE: '🏍️', CAR: '🚗', WALKER: '🚶', VAN: '🚐',
 }
