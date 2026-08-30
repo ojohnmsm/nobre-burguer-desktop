@@ -45,6 +45,14 @@ export function preparoInfo(
     return { terminal: true, totalMin, alvoISO: null, restanteMin: null, atrasado: false }
   }
 
+  // A contagem de PREPARO só vale enquanto o pedido está sendo preparado —
+  // depois de "pronto" ela somava tempo de pronto + entrega e aparecia como
+  // "atrasado" num pedido que já tinha saído.
+  const emPreparo = ['pending', 'awaiting_payment', 'paid', 'preparing'].includes(order.status)
+  if (!emPreparo) {
+    return { terminal: false, totalMin: null, alvoISO: null, restanteMin: null, atrasado: false }
+  }
+
   let alvoISO: string | null = null
   if (order.channel === 'ifood') {
     alvoISO = ifoodDeliveryDateTime(order.external_payload)
@@ -70,6 +78,16 @@ export function iconeVeiculo(v: string | null | undefined): string {
 
 export function labelEstagioEntregador(e: 'a_caminho' | 'na_loja' | 'coletou'): string {
   return e === 'na_loja' ? 'na loja' : e === 'coletou' ? 'coletou' : 'a caminho da loja'
+}
+
+/**
+ * Texto do entregador no card — o que interessa é QUANTO FALTA, não o nome.
+ */
+export function textoEntregador(d: { estagio: 'a_caminho' | 'na_loja' | 'coletou'; pickupEtaMin?: number | null }): string {
+  if (d.estagio === 'na_loja') return 'Entregador na loja'
+  if (d.estagio === 'coletou') return 'Entregador saiu com o pedido'
+  if (d.pickupEtaMin != null) return `Entregador chega em ${d.pickupEtaMin} min`
+  return 'Entregador a caminho'
 }
 
 export function horaLocal(iso: string): string {

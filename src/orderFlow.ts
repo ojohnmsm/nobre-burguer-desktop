@@ -61,6 +61,25 @@ export function proximaEtapa(order: FlowOrder): ProximaEtapa | null {
   return proxima
 }
 
+/** Posição do status no fluxo (recebido = 0 … final = 4). Para barrar/comparar avanço. */
+export function rankStatus(status: OrderStatus): number {
+  switch (status) {
+    case 'pending':
+    case 'awaiting_payment':
+    case 'paid':
+      return 0
+    case 'preparing':
+      return 1
+    case 'ready_to_pickup':
+      return 2
+    case 'out_for_delivery':
+      return 3
+    case 'delivered':
+    case 'cancelled':
+      return 4
+  }
+}
+
 export type OrigemTom = 'ifood' | 'whatsapp' | 'web'
 
 export interface Origem {

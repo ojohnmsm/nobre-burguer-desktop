@@ -32,6 +32,18 @@ export interface IfoodCancelReason {
   description: string
 }
 
+export interface IfoodDispute {
+  id: string
+  disputeId: string
+  ifoodOrderId: string | null
+  displayId: string | null
+  action: string | null
+  timeoutAction: string | null
+  expiresAt: string | null
+  connectionId?: string
+  storeLabel?: string
+}
+
 export interface StorePauseState {
   ok: boolean
   error?: string
@@ -110,7 +122,10 @@ declare global {
       requestIfoodCancel: (id: string, code: string, description: string, connectionId?: string) => Promise<{ ok: boolean; error?: string }>
       getStorePauseState: (connectionId?: string) => Promise<StorePauseState>
       setStorePause: (body: { alvo: 'loja' | 'ifood'; acao: 'pausar' | 'retomar'; minutos?: number }, connectionId?: string) => Promise<{ ok: boolean; error?: string }>
+      getIfoodDisputes: () => Promise<{ disputas: IfoodDispute[] }>
+      respondIfoodDispute: (disputeId: string, resposta: 'accept' | 'reject', motivo: string | null, connectionId?: string) => Promise<{ ok: boolean; error?: string }>
       onPrintError: (callback: (error: string) => void) => () => void
+      onNewOrder: (callback: (info: { id: string; label: string; canal: string; customerName: string; isPickup: boolean }) => void) => () => void
       getStores: () => Promise<{ id: string; storeName: string | null; online: boolean; ifoodConectado: boolean; ifoodPollingParadoSegundos: number | null }[]>
       addConnection: (url: string, token: string) => Promise<{ erro?: string }>
       removeConnection: (id: string) => Promise<{ ok: boolean }>

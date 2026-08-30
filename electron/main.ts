@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, safeStorage, dialog } from 'electron'
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, safeStorage, dialog, Notification } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs'
@@ -463,6 +463,7 @@ function buildReceiptHtml(order: Record<string, unknown>, widthCols: 32 | 48): s
   const bodyWidthMm = widthCols === 48 ? 72 : 48
   const pageWidthMm = widthCols === 48 ? 80 : 58
   const origem = origemLabel(order.channel as string)
+  const isIfood = order.channel === 'ifood'
 
   const PAYMENT_LABELS: Record<string, string> = {
     pix: 'Pix', cash: 'Dinheiro', credit_card: 'Cr&eacute;dito',
@@ -470,11 +471,21 @@ function buildReceiptHtml(order: Record<string, unknown>, widthCols: 32 | 48): s
     ifood_online: 'Pago no iFood', card_on_delivery: 'Cart&atilde;o na entrega',
   }
 
-  const date = new Date(order.created_at as string).toLocaleString('pt-BR', {
+  const ep = (order.external_payload ?? null) as {
+    createdAt?: string
+    merchant?: { name?: string }
+    customer?: { ordersCountOnMerchant?: number }
+    total?: { orderAmount?: number; benefits?: number }
+  } | null
+  const nomeLoja = h(ep?.merchant?.name || order.store_name || '')
+  const nPedidosCliente = typeof ep?.customer?.ordersCountOnMerchant === 'number' ? ep.customer.ordersCountOnMerchant : null
+
+  const date = new Date(((isIfood && ep?.createdAt) || order.created_at) as string).toLocaleString('pt-BR', {
     day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit',
   })
 
   const R = (cents: number) => (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+  const Rf = (reais: number) => Number(reais).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 
   const items = (order.order_items as Record<string, unknown>[]) || []
   const isPickup = order.fulfillment_type === 'pickup'
@@ -531,7 +542,8 @@ function buildReceiptHtml(order: Record<string, unknown>, widthCols: 32 | 48): s
 </head><body>
 
 <p class="center bold" style="font-size:10pt;letter-spacing:1px;margin-bottom:1mm">*** COMANDA ***</p>
-<p class="center sm">${date}</p>
+${nomeLoja ? `<p class="center bold">${nomeLoja}</p>` : ''}
+<p class="center sm">Pedido: ${date}</p>
 <p class="whatsapp">${origem}</p>
 <hr class="sep">
 
@@ -539,6 +551,7 @@ function buildReceiptHtml(order: Record<string, unknown>, widthCols: 32 | 48): s
 ${pickupCodeHtml}
 <p class="bold" style="font-size:10pt">${h(order.customer_name)}</p>
 <p class="sm">${h(order.customer_phone)}</p>
+${nPedidosCliente !== null ? `<p class="sm${nPedidosCliente <= 0 ? ' bold' : ''}">${nPedidosCliente <= 0 ? 'Cliente novo na loja' : `Cliente: ${nPedidosCliente} pedido${nPedidosCliente === 1 ? '' : 's'} na loja`}</p>` : ''}
 
 <hr class="sep">
 
@@ -553,6 +566,10 @@ ${sep}
 <tr><td class="sm">${isPickup ? 'Retirada' : 'Entrega'}</td><td class="r sm">${R(order.delivery_fee_cents as number)}</td></tr>
 ${sep}
 <tr><td class="bold" style="font-size:9.5pt">TOTAL</td><td class="r bold" style="font-size:9.5pt">${R(order.total_cents as number)}</td></tr>
+${isIfood && typeof ep?.total?.benefits === 'number' && ep.total.benefits > 0
+  ? `<tr><td class="sm">Desconto iFood</td><td class="r sm">-${Rf(ep.total.benefits)}</td></tr>` : ''}
+${isIfood && typeof ep?.total?.orderAmount === 'number'
+  ? `<tr><td class="bold sm">Cliente pagou</td><td class="r bold sm">${Rf(ep.total.orderAmount)}</td></tr>` : ''}
 </table>
 
 <hr class="sep">
@@ -673,6 +690,89 @@ ipcMain.handle('fetch-orders', async () => {
   return buscarEmTodasAsLojas('/api/desktop/orders')
 })
 
+// ── Vigia de pedidos novos NO PROCESSO PRINCIPAL ─────────────────────────
+// A janela fica minimizada / na bandeja o dia todo, e o Chromium estrangula o
+// timer do renderer nesse estado. O processo principal nunca dorme — é ELE que
+// garante a impressão da comanda e a notificação de pedido novo. O renderer só
+// toca o som e mostra o toast, avisado por IPC.
+const pedidosVistosMain = new Set<string>()
+let primeiraVarreduraMain = true
+const NOVO_PEDIDO_RECENTE_MS = 20 * 60 * 1000
+
+function deveImprimirCanal(channel: string, filtro: string): boolean {
+  if (filtro === 'ifood') return channel === 'ifood'
+  if (filtro === 'own') return channel !== 'ifood'
+  return true
+}
+
+async function vigiarPedidosNovos() {
+  let pedidos: Record<string, unknown>[]
+  try {
+    pedidos = (await buscarEmTodasAsLojas('/api/desktop/orders')) as Record<string, unknown>[]
+  } catch {
+    return // rede/servidor fora — tenta no próximo ciclo, sem consumir a 1ª varredura
+  }
+
+  const operacionais = pedidos.filter((p) => p.status !== 'awaiting_payment')
+  const novos = primeiraVarreduraMain
+    ? []
+    : operacionais.filter((p) => !pedidosVistosMain.has(p.id as string))
+
+  pedidosVistosMain.clear()
+  for (const p of operacionais) pedidosVistosMain.add(p.id as string)
+  primeiraVarreduraMain = false
+
+  if (novos.length === 0) return
+
+  const cfg = loadConfig()
+  const autoPrint = cfg.autoPrint !== 'false'
+  const canais = cfg.autoPrintChannels || 'all'
+  const widthCols = cfg.printerWidth === '80' ? 48 : 32
+
+  for (const p of novos) {
+    // Um pedido que só "apareceu" na lista mas é de horas atrás não é novo.
+    if (Date.now() - new Date(p.created_at as string).getTime() > NOVO_PEDIDO_RECENTE_MS) continue
+
+    const canal = String(p.channel ?? 'web')
+    const origem = canal === 'ifood' ? ' iFood' : canal === 'whatsapp' ? ' WhatsApp' : ''
+    const isPickup = p.fulfillment_type === 'pickup'
+
+    // Notificação nativa do SO — só quando a janela NÃO está em foco (minimizada,
+    // na bandeja ou atrás de outra). Com a janela à frente, o toast + som do
+    // renderer já cobrem, e a notificação do SO seria barulho duplicado. Deixo
+    // `silent: false` para haver som garantido mesmo se o áudio do renderer
+    // estiver suspenso pelo SO nesse estado.
+    const janelaEmFoco = mainWindow?.isFocused() ?? false
+    if (!janelaEmFoco) {
+      try {
+        new Notification({
+          title: `${isPickup ? 'RETIRADA — ' : ''}Novo pedido${origem}`,
+          body: `#${orderLabel(p as never)} — ${String(p.customer_name ?? '')}`,
+          silent: false,
+        }).show()
+      } catch { /* ignore */ }
+    }
+
+    // Impressão — o processo principal é o dono; o renderer não imprime mais.
+    if (autoPrint && cfg.printerName && deveImprimirCanal(canal, canais)) {
+      try {
+        await autoPrintOrder(p, cfg.printerName, widthCols)
+      } catch (err) {
+        console.error('Falha ao imprimir pedido novo (vigia principal):', err)
+      }
+    }
+
+    // Avisa o renderer para o alerta sonoro + toast na tela.
+    mainWindow?.webContents.send('novo-pedido', {
+      id: p.id,
+      label: orderLabel(p as never),
+      canal,
+      customerName: p.customer_name,
+      isPickup,
+    })
+  }
+}
+
 ipcMain.handle('fetch-order-history', async (_e, opts: { limit: number; offset: number; status?: string }) => {
   const params = new URLSearchParams({ history: 'true', limit: String(opts.limit), offset: String(opts.offset) })
   if (opts.status) params.set('status', opts.status)
@@ -734,6 +834,37 @@ ipcMain.handle('set-store-pause', async (_e, body: Record<string, unknown>, conn
     return { ok: true }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'Não foi possível concluir' }
+  }
+})
+
+// ── Disputas do iFood (Plataforma de Negociação) ─────────────────────────
+ipcMain.handle('get-ifood-disputes', async () => {
+  const conexoes = getConnections()
+  const etiquetar = conexoes.length > 1
+  const resultados = await Promise.allSettled(
+    conexoes.map(async (c) => {
+      const r = await desktopRequest<{ disputas: Record<string, unknown>[] }>('/api/desktop/ifood/disputas', {}, c.id)
+      return (r.disputas ?? []).map((d) => ({
+        ...d,
+        connectionId: c.id,
+        storeLabel: etiquetar ? c.label || 'Loja' : '',
+      }))
+    })
+  )
+  const disputas: unknown[] = []
+  resultados.forEach((r) => { if (r.status === 'fulfilled') disputas.push(...r.value) })
+  return { disputas }
+})
+
+ipcMain.handle('respond-ifood-dispute', async (_e, disputeId: string, resposta: 'accept' | 'reject', motivo: string | null, connectionId?: string) => {
+  try {
+    await desktopRequest('/api/desktop/ifood/disputas', {
+      method: 'POST',
+      body: JSON.stringify({ disputeId, resposta, motivo }),
+    }, connectionId)
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Não foi possível responder a disputa' }
   }
 })
 
@@ -859,6 +990,12 @@ app.whenReady().then(() => {
       preload: join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // A cozinha minimiza / manda o app pra bandeja o dia todo. Sem isto, o
+      // Chromium estrangula os timers do renderer quando a janela não está
+      // visível, e o polling de pedidos novos praticamente para.
+      backgroundThrottling: false,
+      // Deixa o alerta sonoro tocar mesmo com a janela escondida.
+      autoplayPolicy: 'no-user-gesture-required',
     },
   })
 
@@ -898,6 +1035,11 @@ app.whenReady().then(() => {
     setTimeout(checkForUpdates, 5000)
     setInterval(checkForUpdates, 4 * 60 * 60 * 1000)
   }
+
+  // Vigia de pedidos novos no processo principal — imprime e notifica mesmo com
+  // a janela minimizada / na bandeja.
+  setTimeout(() => void vigiarPedidosNovos(), 3000)
+  setInterval(() => void vigiarPedidosNovos(), 10_000)
 })
 
 app.on('before-quit', () => { isQuitting = true })

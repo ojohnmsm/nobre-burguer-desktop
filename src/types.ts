@@ -68,6 +68,8 @@ export interface Order {
   }
   /** Meta de preparo do pedido próprio (min), carimbada na listagem. */
   prep_target_minutes?: number
+  /** Nome da loja, carimbado na listagem — para a comanda impressa. */
+  store_name?: string | null
   acknowledged_at: string | null
   created_at: string
   updated_at: string

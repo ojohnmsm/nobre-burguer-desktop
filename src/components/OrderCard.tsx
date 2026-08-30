@@ -3,7 +3,7 @@ import { ChevronDown, ChevronUp, Printer, Clock, Phone, MapPin, MessageSquare } 
 import { Order, OrderStatus, STATUS_LABELS, PAYMENT_LABELS, fmtMoney, timeAgo } from '../types'
 import { orderLabel } from '../orderLabel'
 import { origemDoPedido, proximaEtapa } from '../orderFlow'
-import { horaLocal, iconeVeiculo, labelEstagioEntregador, preparoInfo } from '../orderTiming'
+import { horaLocal, iconeVeiculo, preparoInfo, textoEntregador } from '../orderTiming'
 
 const STATUS_COLORS: Record<OrderStatus, string> = {
   pending:          'text-[var(--text-muted)] border-[var(--border)]',
@@ -110,13 +110,12 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
             </p>
           )}
           {driver && (
-            <p className="text-xs mt-0.5 flex items-center gap-1 text-[var(--text-muted)]">
+            <p className={`text-xs mt-0.5 flex items-center gap-1 ${
+              driver.estagio === 'na_loja' || (driver.pickupEtaMin != null && driver.pickupEtaMin <= 5)
+                ? 'text-[var(--primary)] font-bold' : 'text-[var(--text-muted)]'
+            }`}>
               <span>{iconeVeiculo(driver.veiculo)}</span>
-              <span className="truncate">
-                {driver.nome ? `${driver.nome} — ` : 'Entregador '}
-                <span className={driver.estagio === 'na_loja' ? 'text-[var(--primary)] font-bold' : ''}>{labelEstagioEntregador(driver.estagio)}</span>
-                {driver.estagio === 'a_caminho' && driver.pickupEtaMin != null && ` · chega em ${driver.pickupEtaMin}min`}
-              </span>
+              <span className="truncate">{textoEntregador(driver)}</span>
             </p>
           )}
           {order.notes && (

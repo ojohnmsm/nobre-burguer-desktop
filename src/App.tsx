@@ -5,9 +5,10 @@ import { Settings } from './components/Settings'
 import { WhatsappPanel } from './components/WhatsappPanel'
 import { CancelIfoodDialog } from './components/CancelIfoodDialog'
 import { StorePausePanel } from './components/StorePausePanel'
+import { DisputasPanel } from './components/DisputasPanel'
 import { CapivaraMark } from './components/CapivaraMark'
 import { KANBAN_COLUMNS, STATUS_LABELS, type Order, type OrderStatus } from './types'
-import { orderLabel } from './orderLabel'
+import { rankStatus } from './orderFlow'
 import type { WhatsappStatusConversation } from './electron-api'
 import { loadNotificationSounds, playDriverArrivedAlert, playMessageAlert, playOrderAlert } from './notification-sound'
 
@@ -23,19 +24,6 @@ function isOperationalOrder(order: Order): boolean {
   return order.status !== 'awaiting_payment'
 }
 
-/**
- * A impressão automática deve imprimir este pedido, dado o filtro de canal?
- *
- * 'all' imprime tudo; 'own' só site/WhatsApp; 'ifood' só iFood. Serve para a
- * loja que já usa o Gestor de Pedidos do iFood (que imprime a comanda dele) e
- * não quer a comanda duplicada aqui — ou o contrário.
- */
-function deveImprimir(channel: string, filtro: string): boolean {
-  if (filtro === 'ifood') return channel === 'ifood'
-  if (filtro === 'own') return channel !== 'ifood'
-  return true
-}
-
 export default function App() {
   const [tab, setTab] = useState<Tab>('kanban')
   const [stores, setStores] = useState<{ id: string; storeName: string | null; online: boolean; ifoodConectado: boolean; ifoodPollingParadoSegundos: number | null }[]>([])
@@ -46,11 +34,11 @@ export default function App() {
   const [configured, setConfigured] = useState(false)
 
   const notificationTimerRef = useRef<number | null>(null)
-  const knownOrderIdsRef = useRef<Set<string>>(new Set())
   const hasLoadedOrdersRef = useRef(false)
   const driverStageRef = useRef<Map<string, string>>(new Map())
-  const autoPrintRef = useRef(true)
-  const autoPrintChannelsRef = useRef<string>('all')
+  // Pedido do iFood: o card anda NA HORA ao clicar; este mapa segura a posição
+  // otimista até o servidor alcançar (evento do iFood chegou) ou o prazo estourar.
+  const optimisticRef = useRef<Map<string, { status: OrderStatus; ts: number }>>(new Map())
   const [windowMaximized, setWindowMaximized] = useState(false)
 
   // ── Pedidos novos não vistos (abrir o card reconhece) ──────────────────────
@@ -87,35 +75,31 @@ export default function App() {
     try {
       const data = await window.api.fetchOrders()
       const operationalOrders = data.filter(isOperationalOrder)
-      const newOrders = hasLoadedOrdersRef.current
-        ? operationalOrders.filter(order => !knownOrderIdsRef.current.has(order.id))
-        : []
 
-      setOrders(operationalOrders)
-      knownOrderIdsRef.current = new Set(operationalOrders.map(order => order.id))
+      // Segura a posição otimista de pedido do iFood até o servidor alcançar
+      // (evento chegou) ou o prazo de 90s estourar.
+      const agoraMerge = Date.now()
+      const idsAtuais = new Set(operationalOrders.map(o => o.id))
+      for (const idOpt of [...optimisticRef.current.keys()]) {
+        if (!idsAtuais.has(idOpt)) optimisticRef.current.delete(idOpt)
+      }
+      const comOtimista = operationalOrders.map(order => {
+        const opt = optimisticRef.current.get(order.id)
+        if (!opt) return order
+        if (rankStatus(order.status) >= rankStatus(opt.status) || agoraMerge - opt.ts > 90_000) {
+          optimisticRef.current.delete(order.id)
+          return order
+        }
+        return { ...order, status: opt.status }
+      })
+
+      setOrders(comOtimista)
       hasLoadedOrdersRef.current = true
 
-      // Só alerta/imprime pedido criado agora há pouco. Um pedido que "apareceu"
-      // na lista mas é de horas atrás (computador reaberto depois de fechado,
-      // pedido envelhecendo para dentro da janela de 24h, primeira carga que
-      // falhou) NÃO é novo: fica no kanban com o selo "não visto", sem tocar
-      // nem imprimir.
-      const RECENTE_MS = 20 * 60 * 1000
-      const agora = Date.now()
-      const paraAlertar = newOrders.filter(order => agora - new Date(order.created_at).getTime() < RECENTE_MS)
-
-      // Toca UMA vez quando chega pedido novo — não em laço até reconhecer.
-      if (paraAlertar.length > 0) playOrderAlert()
-
-      for (const order of paraAlertar) {
-        const isPickup = order.fulfillment_type === 'pickup'
-        const origem = order.channel === 'ifood' ? 'iFood — ' : order.channel === 'whatsapp' ? 'WhatsApp — ' : ''
-        addNotification(`${isPickup ? 'RETIRADA — ' : ''}${origem}Novo pedido #${orderLabel(order)} — ${order.customer_name}`)
-        if (autoPrintRef.current && deveImprimir(order.channel, autoPrintChannelsRef.current)) {
-          const result = await window.api.printOrder(order)
-          if (result === 'no-printer') addNotification('Configure uma impressora para ativar a impressão automática')
-        }
-      }
+      // Pedido NOVO (alerta sonoro + toast + impressão) é responsabilidade do
+      // PROCESSO PRINCIPAL agora (evento 'novo-pedido'), porque o timer do
+      // renderer para quando a janela está minimizada / na bandeja. Aqui só
+      // atualizamos o kanban na tela.
 
       // Som de "entregador chegou": na transição para o estágio na_loja, uma
       // vez por pedido. A primeira aparição não conta — só quando já vimos o
@@ -149,8 +133,6 @@ export default function App() {
     const ready = config.connections.length > 0
     setConfigured(ready)
     setAutoPrint(config.autoPrint !== 'false')
-    autoPrintRef.current = config.autoPrint !== 'false'
-    autoPrintChannelsRef.current = config.autoPrintChannels || 'all'
 
     // Os nomes das lojas vêm junto: sem servidor configurado não há a quem
     // perguntar, e com ele configurado a resposta muda se o código for trocado.
@@ -172,9 +154,23 @@ export default function App() {
     })
 
     const unsubscribeError = window.api.onPrintError(error => addNotification(`Erro de impressão: ${error}`))
+
+    // Pedido novo detectado pelo PROCESSO PRINCIPAL — que roda mesmo com a
+    // janela minimizada / na bandeja, quando os timers do renderer congelam.
+    // Ele já imprimiu a comanda e disparou a notificação nativa do SO; aqui
+    // só complementamos com o som configurável e o aviso dentro do app.
+    const unsubscribeNovoPedido = window.api.onNewOrder(info => {
+      playOrderAlert()
+      const origem = info.canal === 'ifood' ? 'iFood — ' : info.canal === 'whatsapp' ? 'WhatsApp — ' : ''
+      const retirada = info.isPickup ? 'RETIRADA — ' : ''
+      addNotification(`🔔 ${retirada}${origem}Novo pedido #${info.label} — ${info.customerName}`)
+      void loadOrders()
+    })
+
     return () => {
       active = false
       unsubscribeError()
+      unsubscribeNovoPedido()
       if (notificationTimerRef.current) window.clearTimeout(notificationTimerRef.current)
     }
   }, [addNotification, loadOrders, readConfig])
@@ -296,17 +292,34 @@ export default function App() {
     // um pedido da segunda loja iria para o servidor da primeira — que
     // responderia "não encontrado", ou acertaria outro pedido por acaso.
     const alvo = orders.find(o => o.id === id)
+    const isIfood = alvo?.channel === 'ifood'
+    const anterior = alvo?.status
+
+    // Resposta visual IMEDIATA para pedido do iFood: move o card já e verifica
+    // com o iFood em segundo plano. Se recusar/falhar, volta.
+    if (isIfood) {
+      optimisticRef.current.set(id, { status, ts: Date.now() })
+      setOrders(previous => previous.map(order => order.id === id ? { ...order, status } : order))
+    }
+
     const res = await window.api.updateOrderStatus(id, status, alvo?.connectionId)
+
     if (!res.ok) {
+      if (isIfood && anterior) {
+        optimisticRef.current.delete(id)
+        setOrders(previous => previous.map(order => order.id === id ? { ...order, status: anterior } : order))
+      }
       addNotification(res.error || 'Não foi possível atualizar o status do pedido')
       return
     }
     if (res.requested) {
-      // Pedido do iFood: pedimos a ação; o card anda quando o evento voltar no
-      // próximo ciclo de polling, não agora.
+      // iFood aceitou processar. O card já está na posição nova; o evento real
+      // confirma no próximo polling e o merge de loadOrders segura a posição
+      // até lá (ou reverte no timeout de 90s).
       addNotification(res.message || 'Enviado ao iFood')
       return
     }
+    optimisticRef.current.delete(id)
     setOrders(previous => previous.map(order => order.id === id ? { ...order, status } : order))
   }
 
@@ -323,7 +336,6 @@ export default function App() {
     const nextValue = !autoPrint
     await window.api.saveConfig({ autoPrint: nextValue ? 'true' : 'false' })
     setAutoPrint(nextValue)
-    autoPrintRef.current = nextValue
     addNotification(nextValue ? 'Impressão automática ativada' : 'Impressão automática desativada')
   }
 
@@ -331,7 +343,6 @@ export default function App() {
     const ready = await readConfig()
     if (ready) {
       hasLoadedOrdersRef.current = false
-      knownOrderIdsRef.current.clear()
       await loadOrders()
       setTab('kanban')
     }
@@ -468,6 +479,8 @@ export default function App() {
           </button>
         </div>
       </div>
+
+      {tab !== 'whatsapp' && tab !== 'settings' && <DisputasPanel notify={addNotification} />}
 
       {hasUrgentAlert && tab !== 'whatsapp' && (
         <div className="flex items-center justify-between gap-3 flex-wrap px-3 py-2 bg-red-500/10 border-b border-red-500/30 flex-shrink-0">

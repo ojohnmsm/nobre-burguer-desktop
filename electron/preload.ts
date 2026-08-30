@@ -13,9 +13,17 @@ contextBridge.exposeInMainWorld('api', {
   requestIfoodCancel: (id: string, code: string, description: string, connectionId?: string) => ipcRenderer.invoke('request-ifood-cancel', id, code, description, connectionId),
   getStorePauseState: (connectionId?: string) => ipcRenderer.invoke('get-store-pause-state', connectionId),
   setStorePause: (body: unknown, connectionId?: string) => ipcRenderer.invoke('set-store-pause', body, connectionId),
+  getIfoodDisputes: () => ipcRenderer.invoke('get-ifood-disputes'),
+  respondIfoodDispute: (disputeId: string, resposta: 'accept' | 'reject', motivo: string | null, connectionId?: string) =>
+    ipcRenderer.invoke('respond-ifood-dispute', disputeId, resposta, motivo, connectionId),
   onPrintError:      (cb: (err: string) => void) => {
     ipcRenderer.on('print-error', (_e, err) => cb(err))
     return () => ipcRenderer.removeAllListeners('print-error')
+  },
+  onNewOrder: (cb: (info: { id: string; label: string; canal: string; customerName: string; isPickup: boolean }) => void) => {
+    const listener = (_e: unknown, info: { id: string; label: string; canal: string; customerName: string; isPickup: boolean }) => cb(info)
+    ipcRenderer.on('novo-pedido', listener)
+    return () => ipcRenderer.removeListener('novo-pedido', listener)
   },
   getStores:           ()                                          => ipcRenderer.invoke('get-stores'),
   addConnection:       (url: string, token: string)                 => ipcRenderer.invoke('add-connection', url, token),

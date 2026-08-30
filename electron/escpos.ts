@@ -86,15 +86,34 @@ const PAYMENT: Record<string, string> = {
 
 type ReceiptOrder = Record<string, unknown>
 
+interface IfoodPayload {
+  createdAt?: string
+  merchant?: { name?: string }
+  customer?: { ordersCountOnMerchant?: number; segmentation?: string }
+  total?: { orderAmount?: number; benefits?: number }
+}
+
 export function buildReceiptEscPos(order: ReceiptOrder, width: 32 | 48 = 32): Buffer {
   const { ctr, row, wrap, div, dbl } = layout(width)
   const R = (cents: number) => 'R$' + (Number(cents) / 100).toFixed(2).replace('.', ',')
-  const date = new Date(order.created_at as string).toLocaleString('pt-BR', {
+  /** Reais decimais (o iFood manda assim no total), não centavos. */
+  const Rf = (reais: number) => 'R$' + Number(reais).toFixed(2).replace('.', ',')
+
+  const ep = (order.external_payload ?? null) as IfoodPayload | null
+  const isIfood = order.channel === 'ifood'
+  // Data/hora: no iFood, quando o pedido foi feito de verdade (createdAt do
+  // payload), não quando nós ingerimos.
+  const dataPedido = (isIfood && ep?.createdAt) || (order.created_at as string)
+  const date = new Date(dataPedido).toLocaleString('pt-BR', {
     day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit',
   })
+  const nomeLoja = ascii(ep?.merchant?.name || order.store_name || '').trim()
+  const nPedidosCliente = typeof ep?.customer?.ordersCountOnMerchant === 'number'
+    ? ep.customer.ordersCountOnMerchant
+    : null
+
   const items = (order.order_items as Record<string, unknown>[]) || []
   const isPickup = order.fulfillment_type === 'pickup'
-  const isIfood = order.channel === 'ifood'
   const pickupAddress = ascii(order.pickup_address).trim()
 
   const addrLine = [
@@ -109,7 +128,8 @@ export function buildReceiptEscPos(order: ReceiptOrder, width: 32 | 48 = 32): Bu
   const out: Buffer[] = [CMD.init]
 
   out.push(line('*** COMANDA ***', { center: true, bold: true }))
-  out.push(line(date, { center: true }))
+  if (nomeLoja) out.push(line(nomeLoja, { center: true, bold: true }))
+  out.push(line(`Pedido: ${date}`, { center: true }))
   out.push(line(`--- ${origemLabel(order.channel as string)} ---`, { center: true, bold: true }))
   out.push(line(div))
 
@@ -120,6 +140,14 @@ export function buildReceiptEscPos(order: ReceiptOrder, width: 32 | 48 = 32): Bu
   }
   out.push(line(ascii(order.customer_name)))
   out.push(line(ascii(order.customer_phone)))
+  if (nPedidosCliente !== null) {
+    out.push(line(
+      nPedidosCliente <= 0
+        ? 'Cliente novo na loja'
+        : `Cliente: ${nPedidosCliente} pedido${nPedidosCliente === 1 ? '' : 's'} na loja`,
+      { bold: nPedidosCliente <= 0 }
+    ))
+  }
   out.push(line(div))
 
   if (isPickup) {
@@ -132,7 +160,16 @@ export function buildReceiptEscPos(order: ReceiptOrder, width: 32 | 48 = 32): Bu
   out.push(line(div))
 
   for (const item of items) {
-    out.push(line(row(`${item.quantity}x ${ascii(item.product_name)}`, R(item.subtotal_cents as number))))
+    const nomeItem = `${item.quantity}x ${ascii(item.product_name)}`
+    const preco = R(item.subtotal_cents as number)
+    if (nomeItem.length + preco.length + 1 <= width) {
+      out.push(line(row(nomeItem, preco)))
+    } else {
+      // Nome longo: QUEBRA em linhas próprias (não corta) e o preço à direita
+      // logo abaixo.
+      for (const l of wrap(nomeItem)) out.push(line(l))
+      out.push(line(row('', preco)))
+    }
     const addons = ((item.addon_selections as { selectedOptions: { name: string }[] }[]) || [])
       .flatMap((a) => a.selectedOptions.map((o) => `  + ${ascii(o.name)}`))
     for (const a of addons) out.push(line(a))
@@ -145,6 +182,14 @@ export function buildReceiptEscPos(order: ReceiptOrder, width: 32 | 48 = 32): Bu
   out.push(line(dbl))
   out.push(line(row('TOTAL', R(order.total_cents as number)), { bold: true }))
   out.push(line(dbl))
+  // iFood: quanto o cliente efetivamente pagou (com desconto/cupom e taxa do
+  // iFood), que é diferente do que a loja recebe (o TOTAL acima).
+  if (isIfood && typeof ep?.total?.orderAmount === 'number') {
+    if (typeof ep.total.benefits === 'number' && ep.total.benefits > 0) {
+      out.push(line(row('Desconto iFood', '-' + Rf(ep.total.benefits))))
+    }
+    out.push(line(row('Cliente pagou', Rf(ep.total.orderAmount)), { bold: true }))
+  }
   out.push(line(`Pagto: ${PAYMENT[order.payment_method as string] || ascii(order.payment_method)}`, { bold: true }))
   if (order.change_for_cents) out.push(line(`Troco para: ${R(order.change_for_cents as number)}`))
   if (order.notes) {
