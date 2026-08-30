@@ -47,7 +47,13 @@ function BlocoLoja({ loja, unica, notify }: { loja: Loja; unica: boolean; notify
   }
 
   const nome = loja.storeName || 'Loja'
-  const lojaAberta = estado?.loja?.aberta ?? true
+  const lojaInfo = estado?.loja
+  const overrideAtivo = lojaInfo?.overrideAtivo ?? true
+  const dentroDoHorario = lojaInfo?.dentroDoHorario ?? true
+  const lojaAberta = lojaInfo?.aberta ?? true // efetivo: chave geral E horário
+  const lojaTexto = !overrideAtivo ? 'fechado · pausado'
+    : !dentroDoHorario ? 'fechado · fora do horário'
+    : 'aberto'
   const ifood = estado?.ifood
 
   return (
@@ -60,27 +66,37 @@ function BlocoLoja({ loja, unica, notify }: { loja: Loja; unica: boolean; notify
         </p>
       ) : (
         <>
-          {/* Cardápio próprio */}
+          {/* Cardápio próprio — o "aberto" só vale com a chave geral ligada E
+              dentro do horário; o texto diz qual dos dois está fechando. */}
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs flex items-center gap-1.5">
-              <Power size={13} className={lojaAberta ? 'text-[var(--success)]' : 'text-[var(--danger)]'} />
-              Cardápio próprio: <b>{lojaAberta ? 'aberto' : 'fechado'}</b>
+              <Power size={13} className={
+                lojaAberta ? 'text-[var(--success)]'
+                : overrideAtivo ? 'text-[var(--primary)]'
+                : 'text-[var(--danger)]'
+              } />
+              Cardápio próprio: <b>{lojaTexto}</b>
             </span>
             <button
               disabled={ocupado}
               onClick={() =>
                 agir(
-                  { alvo: 'loja', acao: lojaAberta ? 'pausar' : 'retomar' },
-                  lojaAberta
-                    ? `Fechar o cardápio próprio de ${nome}? Os clientes param de conseguir pedir pelo site.`
-                    : `Reabrir o cardápio próprio de ${nome}?`,
+                  { alvo: 'loja', acao: overrideAtivo ? 'pausar' : 'retomar' },
+                  overrideAtivo
+                    ? `Fechar o cardápio próprio de ${nome}? Fica fechado até você reabrir — mesmo dentro do horário.`
+                    : `Reabrir o cardápio próprio de ${nome}? Volta a seguir o horário de funcionamento.`,
                 )
               }
               className="text-[11px] px-2 py-1 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:opacity-40 flex items-center gap-1"
             >
-              {lojaAberta ? <><Pause size={11} /> Fechar</> : <><Play size={11} /> Reabrir</>}
+              {overrideAtivo ? <><Pause size={11} /> Fechar</> : <><Play size={11} /> Reabrir</>}
             </button>
           </div>
+          {overrideAtivo && !dentroDoHorario && (
+            <p className="text-[10px] text-[var(--text-xmuted)] -mt-1">
+              A chave geral está ligada; fecha e abre sozinho pelo horário configurado.
+            </p>
+          )}
 
           {/* iFood */}
           {ifood?.conectada ? (
@@ -100,9 +116,11 @@ function BlocoLoja({ loja, unica, notify }: { loja: Loja; unica: boolean; notify
             ) : (
               <div className="space-y-1.5">
                 <span className="text-xs flex items-center gap-1.5">
-                  <Pause size={12} className="text-[var(--text-muted)]" />
-                  iFood: {ifood.recebendo === false ? 'não está recebendo' : 'recebendo'} — pausar por:
+                  <Power size={13} className={ifood.recebendo === false ? 'text-[var(--danger)]' : ifood.recebendo ? 'text-[var(--success)]' : 'text-[var(--text-muted)]'} />
+                  iFood: <b>{ifood.recebendo === false ? 'fechado' : ifood.recebendo ? 'recebendo' : 'conectado'}</b>
+                  {ifood.recebendo === false && ifood.motivo ? <span className="text-[var(--text-muted)]"> · {ifood.motivo.toLowerCase()}</span> : null}
                 </span>
+                <span className="text-[11px] text-[var(--text-muted)] block">Pausar por:</span>
                 <div className="flex gap-1.5 flex-wrap">
                   {OPCOES_PAUSA.map(min => (
                     <button

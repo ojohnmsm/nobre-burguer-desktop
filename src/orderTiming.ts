@@ -98,6 +98,10 @@ interface UrgenciaOrder extends TimingOrder {
 export function nivelUrgencia(order: UrgenciaOrder, agora: number = Date.now()): NivelUrgencia | null {
   if (order.status === 'delivered' || order.status === 'cancelled') return null
   if (order.status === 'out_for_delivery') return null
+  // Pedido do iFood: quando a cozinha marca "pronto", o resto é com o iFood
+  // (o motoboy). Não faz sentido pintar de vermelho o que a cozinha já
+  // terminou e não controla — a urgência de preparo para aqui.
+  if (order.channel === 'ifood' && order.status === 'ready_to_pickup') return null
 
   const criadoMs = new Date(order.created_at).getTime()
   let alvoMs: number | null = null

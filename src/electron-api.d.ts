@@ -50,12 +50,21 @@ export interface IfoodDispute {
 export interface StorePauseState {
   ok: boolean
   error?: string
-  loja?: { aberta: boolean }
+  loja?: {
+    /** Efetivo: chave geral ligada E dentro do horário. */
+    aberta: boolean
+    /** A chave geral (is_open_override). */
+    overrideAtivo: boolean
+    /** O relógio: está dentro de uma janela de funcionamento agora. */
+    dentroDoHorario: boolean
+  }
   ifood?: {
     conectada: boolean
     pausada: boolean
     pausadaAte: string | null
     recebendo: boolean | null
+    /** Motivo de o iFood não estar recebendo (ex.: "Fora do horário"), quando há. */
+    motivo: string | null
   }
 }
 

@@ -29,11 +29,15 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
   const [open, setOpen] = useState(false)
   const isIfood = order.channel === 'ifood'
   const isTerminal = order.status === 'delivered' || order.status === 'cancelled'
-  // Em pedido terminal a contagem CONGELA no instante em que ele terminou
+  // A COZINHA já terminou com este pedido? Terminal, ou pedido do iFood que
+  // saiu do preparo — daí em diante o motoboy é problema do iFood, não da
+  // cozinha. A contagem CONGELA no instante em que saiu do preparo
   // (updated_at), em vez de correr para sempre.
-  const fim = isTerminal ? new Date(order.updated_at).getTime() : Date.now()
+  const cozinhaConcluiu = isTerminal
+    || (isIfood && (order.status === 'ready_to_pickup' || order.status === 'out_for_delivery'))
+  const fim = cozinhaConcluiu ? new Date(order.updated_at).getTime() : Date.now()
   const ago = timeAgo(order.created_at, fim)
-  const isOld = !isTerminal && (fim - new Date(order.created_at).getTime()) > 30 * 60000
+  const isOld = !cozinhaConcluiu && (fim - new Date(order.created_at).getTime()) > 30 * 60000
   const preparo = preparoInfo(order, order.prep_target_minutes ?? 0)
   const urgencia = nivelUrgencia(order)
   const driver = order.ifood_driver ?? null
@@ -80,7 +84,7 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
               {orderLabel(order)}
             </span>
             <span className={`text-xs flex items-center gap-0.5 flex-shrink-0 tabular-nums ${urgenciaTexto}`}>
-              <Clock size={11} />{isTerminal ? `total ${ago}` : ago}
+              <Clock size={11} />{cozinhaConcluiu ? `total ${ago}` : ago}
             </span>
           </div>
           {/* Linha 2: modalidade (fixa e forte — muda o que a cozinha faz),
