@@ -70,34 +70,64 @@ export function preparoInfo(
 
 export type NivelUrgencia = 'fresca' | 'aquecendo' | 'atrasada'
 
+interface UrgenciaOrder extends TimingOrder {
+  /** Limites por etapa do pedido próprio (carimbados na listagem). */
+  confirm_target_minutes?: number | null
+  prep_target_minutes?: number | null
+  ready_target_minutes?: number | null
+}
+
 /**
  * Nível de urgência do pedido, para a COR do cartão (faixa lateral + fundo).
- * Sai do mesmo prazo de preparo da contagem regressiva:
+ * O prazo depende da ETAPA atual:
+ *
+ *   iFood         → sempre o horário prometido (`delivery.deliveryDateTime`), o
+ *                   prazo único que o pedido inteiro corre, como no Gestor.
+ *   Pedido próprio → soma dos limites das etapas ATÉ a atual, a partir de
+ *                   `created_at` — "devia ter saído até confirmar + preparar +
+ *                   aguardar minutos depois de entrar". Só depende de
+ *                   `created_at`, então não escorrega com outros writes na linha.
  *
  *   atrasado                    → 'atrasada'   (vermelho)
  *   resta ≤ metade da janela    → 'aquecendo'  (amarelo)  — a regra do iFood
  *   resta  > metade da janela   → 'fresca'     (verde)
  *
- * `null` quando não há prazo: pedido terminal, fora do preparo, ou pedido
- * próprio sem "meta de preparo" configurada. Nesse caso o cartão fica neutro.
+ * `null` (cartão neutro) quando: terminal, já saiu para entrega, iFood sem
+ * horário no payload, ou pedido próprio sem nenhum limite de etapa configurado.
  */
-export function nivelUrgencia(
-  order: TimingOrder,
-  prepTargetMinutes: number,
-  agora: number = Date.now()
-): NivelUrgencia | null {
-  const info = preparoInfo(order, prepTargetMinutes, agora)
-  if (info.terminal || !info.alvoISO || info.restanteMin == null) return null
-  if (info.atrasado) return 'atrasada'
+export function nivelUrgencia(order: UrgenciaOrder, agora: number = Date.now()): NivelUrgencia | null {
+  if (order.status === 'delivered' || order.status === 'cancelled') return null
+  if (order.status === 'out_for_delivery') return null
 
-  const janelaMin = (new Date(info.alvoISO).getTime() - new Date(order.created_at).getTime()) / 60000
+  const criadoMs = new Date(order.created_at).getTime()
+  let alvoMs: number | null = null
+
+  if (order.channel === 'ifood') {
+    const iso = ifoodDeliveryDateTime(order.external_payload)
+    alvoMs = iso ? new Date(iso).getTime() : null
+  } else {
+    const confirmar = Math.max(0, order.confirm_target_minutes ?? 0)
+    const preparar = Math.max(0, order.prep_target_minutes ?? 0)
+    const aguardar = Math.max(0, order.ready_target_minutes ?? 0)
+    // Soma cumulativa até a etapa atual.
+    const janelaMin =
+      order.status === 'ready_to_pickup' ? confirmar + preparar + aguardar
+      : order.status === 'preparing'     ? confirmar + preparar
+      : confirmar // pending / awaiting_payment / paid
+    if (janelaMin > 0) alvoMs = criadoMs + janelaMin * 60000
+  }
+
+  if (alvoMs == null) return null
+
+  const restanteMin = Math.round((alvoMs - agora) / 60000)
+  if (restanteMin < 0) return 'atrasada'
+  const janelaMin = (alvoMs - criadoMs) / 60000
   const metade = janelaMin > 0 ? janelaMin / 2 : 10
-  return info.restanteMin <= metade ? 'aquecendo' : 'fresca'
+  return restanteMin <= metade ? 'aquecendo' : 'fresca'
 }
 
-interface FilaOrder extends TimingOrder {
+interface FilaOrder extends UrgenciaOrder {
   acknowledged_at?: string | null
-  prep_target_minutes?: number | null
 }
 
 const PESO_URGENCIA: Record<NivelUrgencia, number> = { atrasada: 0, aquecendo: 1, fresca: 2 }
@@ -126,8 +156,8 @@ export function compararFilaCozinha(a: FilaOrder, b: FilaOrder, agora: number = 
   const pendB = b.acknowledged_at ? 1 : 0
   if (pendA !== pendB) return pendA - pendB
 
-  const nA = nivelUrgencia(a, a.prep_target_minutes ?? 0, agora)
-  const nB = nivelUrgencia(b, b.prep_target_minutes ?? 0, agora)
+  const nA = nivelUrgencia(a, agora)
+  const nB = nivelUrgencia(b, agora)
   const urgA = nA ? PESO_URGENCIA[nA] : 3
   const urgB = nB ? PESO_URGENCIA[nB] : 3
   if (urgA !== urgB) return urgA - urgB

@@ -66,8 +66,10 @@ export interface Order {
     pickupEtaMin?: number | null
     deliveryEtaMin?: number | null
   }
-  /** Meta de preparo do pedido próprio (min), carimbada na listagem. */
+  /** Limites por etapa do pedido próprio (min), carimbados na listagem — cor de urgência do cartão. */
+  confirm_target_minutes?: number
   prep_target_minutes?: number
+  ready_target_minutes?: number
   /** Nome da loja, carimbado na listagem — para a comanda impressa. */
   store_name?: string | null
   acknowledged_at: string | null

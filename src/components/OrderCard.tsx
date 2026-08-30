@@ -35,7 +35,7 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
   const ago = timeAgo(order.created_at, fim)
   const isOld = !isTerminal && (fim - new Date(order.created_at).getTime()) > 30 * 60000
   const preparo = preparoInfo(order, order.prep_target_minutes ?? 0)
-  const urgencia = nivelUrgencia(order, order.prep_target_minutes ?? 0)
+  const urgencia = nivelUrgencia(order)
   const driver = order.ifood_driver ?? null
   const proxima = proximaEtapa(order)
   const isPickup = order.fulfillment_type === 'pickup'
