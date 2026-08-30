@@ -1,6 +1,6 @@
 {
   "name": "cardapia-desktop",
-  "version": "1.1.13",
+  "version": "1.1.14",
   "description": "Cardapia — Gerenciador de Pedidos",
   "main": "dist-electron/main/main.js",
   "engines": {
