@@ -40,6 +40,9 @@ export interface IfoodDispute {
   action: string | null
   timeoutAction: string | null
   expiresAt: string | null
+  message: string | null
+  handshakeType: string | null
+  refundMaxCents: number | null
   connectionId?: string
   storeLabel?: string
 }

@@ -178,7 +178,7 @@ export default function App() {
 
   useEffect(() => {
     if (!configured) return
-    const interval = window.setInterval(() => { void loadOrders() }, 10000)
+    const interval = window.setInterval(() => { void loadOrders() }, 7000)
     return () => window.clearInterval(interval)
   }, [configured, loadOrders])
 

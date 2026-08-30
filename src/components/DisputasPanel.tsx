@@ -18,6 +18,32 @@ function tempoRestante(expiresAt: string | null, agora: number): { texto: string
   return { texto: `${Math.floor(minutos / 60)}h${String(minutos % 60).padStart(2, '0')} restantes`, urgente: false }
 }
 
+function rotuloAcao(action: string | null): string {
+  const a = (action ?? '').toUpperCase()
+  if (a === 'CANCELLATION') return 'Cliente pediu cancelamento'
+  if (a === 'REFUND') return 'Cliente pediu reembolso'
+  if (a.includes('ITEM')) return 'Cliente reclamou de item'
+  return action || 'Contestação'
+}
+
+function rotuloMomento(handshakeType: string | null): string | null {
+  const t = (handshakeType ?? '').toUpperCase()
+  if (t.includes('AFTER')) return 'após a entrega'
+  if (t.includes('BEFORE') || t.includes('PRE')) return 'antes da entrega'
+  return null
+}
+
+function rotuloTimeout(timeoutAction: string | null): string {
+  const t = (timeoutAction ?? '').toUpperCase()
+  if (t.includes('REJECT')) return 'o iFood recusa automaticamente (o pedido é mantido)'
+  if (t.includes('ACCEPT') || t.includes('REFUND')) return 'o iFood aceita automaticamente (o cliente é reembolsado)'
+  return timeoutAction || 'o iFood decide sozinho'
+}
+
+function reais(cents: number): string {
+  return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+}
+
 export function DisputasPanel({ notify }: { notify: (message: string) => void }) {
   const [disputas, setDisputas] = useState<IfoodDispute[]>([])
   const [carregando, setCarregando] = useState(true)
@@ -72,23 +98,43 @@ export function DisputasPanel({ notify }: { notify: (message: string) => void })
       </p>
       {disputas.map(disputa => {
         const prazo = tempoRestante(disputa.expiresAt, agora)
+        const momento = rotuloMomento(disputa.handshakeType)
         return (
           <div key={disputa.id} className="rounded-lg border border-red-500/30 bg-[var(--card)] px-2.5 py-2 space-y-1.5">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <span className="text-xs">
                 {disputa.storeLabel && <span className="text-[var(--text-muted)]">{disputa.storeLabel} · </span>}
                 {disputa.displayId && <span className="font-bold">#{disputa.displayId} · </span>}
-                {disputa.action === 'CANCELLATION' ? 'Cliente pediu cancelamento' : disputa.action || 'Contestação'}
+                {rotuloAcao(disputa.action)}
+                {momento && <span className="text-[var(--text-muted)]"> · {momento}</span>}
               </span>
               <span className={`text-[11px] font-bold ${prazo.urgente ? 'text-[var(--danger)]' : 'text-[var(--primary)]'}`}>
                 {prazo.texto}
               </span>
             </div>
-            {disputa.timeoutAction && (
-              <p className="text-[10px] text-[var(--text-muted)]">
-                Se ninguém responder: {disputa.timeoutAction === 'REJECT_CANCELLATION' ? 'o iFood recusa automaticamente' : disputa.timeoutAction}
+
+            {disputa.message && (
+              <p className="text-xs text-[var(--text)] bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5">
+                <span className="text-[var(--text-muted)]">Cliente: </span>“{disputa.message}”
               </p>
             )}
+
+            {disputa.refundMaxCents != null && (
+              <p className="text-[11px] text-[var(--text-muted)]">
+                Reembolso proposto: até <span className="font-semibold text-[var(--text)]">{reais(disputa.refundMaxCents)}</span>
+              </p>
+            )}
+
+            {disputa.timeoutAction && (
+              <p className="text-[10px] text-[var(--text-muted)]">
+                Sem resposta no prazo: {rotuloTimeout(disputa.timeoutAction)}
+              </p>
+            )}
+
+            <p className="text-[10px] text-[var(--text-muted)]">
+              <span className="text-[var(--primary)] font-semibold">Aceitar</span> reembolsa o cliente · <span className="text-[var(--danger)] font-semibold">Recusar</span> mantém o pedido
+            </p>
+
             <div className="flex gap-2">
               <button
                 onClick={() => void responder(disputa, 'accept')}

@@ -1038,8 +1038,8 @@ app.whenReady().then(() => {
 
   // Vigia de pedidos novos no processo principal — imprime e notifica mesmo com
   // a janela minimizada / na bandeja.
-  setTimeout(() => void vigiarPedidosNovos(), 3000)
-  setInterval(() => void vigiarPedidosNovos(), 10_000)
+  setTimeout(() => void vigiarPedidosNovos(), 2000)
+  setInterval(() => void vigiarPedidosNovos(), 7_000)
 })
 
 app.on('before-quit', () => { isQuitting = true })
