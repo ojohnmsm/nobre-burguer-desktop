@@ -6,6 +6,10 @@ export type OrderStatus =
 export interface AddonSelection {
   groupName: string
   selectedOptions: { name: string; price_cents: number }[]
+  /** 'sum' (padrão) | 'average' | 'highest'. Ausente em pedido antigo. */
+  pricingRule?: 'sum' | 'average' | 'highest'
+  /** Preço do grupo já com a regra aplicada (média/maior). */
+  groupPriceCents?: number
 }
 
 export interface OrderItem {

@@ -490,8 +490,14 @@ function buildReceiptHtml(order: Record<string, unknown>, widthCols: 32 | 48): s
   const items = (order.order_items as Record<string, unknown>[]) || []
   const isPickup = order.fulfillment_type === 'pickup'
   const itemsHtml = items.map((item: Record<string, unknown>) => {
-    const addons = ((item.addon_selections as { groupName: string; selectedOptions: { name: string }[] }[]) || [])
-      .map(a => `<tr><td colspan="2" class="sm" style="padding-left:2mm">+ ${a.selectedOptions.map(o => h(o.name)).join(', ')}</td></tr>`)
+    const addons = ((item.addon_selections as { groupName: string; selectedOptions: { name: string }[]; pricingRule?: string; groupPriceCents?: number }[]) || [])
+      .map(a => {
+        const nomes = a.selectedOptions.map(o => h(o.name)).join(', ')
+        const tag = a.pricingRule && a.pricingRule !== 'sum'
+          ? ` <b>(${a.pricingRule === 'average' ? 'média' : 'maior'} ${R(a.groupPriceCents ?? 0)})</b>`
+          : ''
+        return `<tr><td colspan="2" class="sm" style="padding-left:2mm">+ ${nomes}${tag}</td></tr>`
+      })
       .join('')
     const tam = item.variation_name ? ` · ${h(item.variation_name as string)}` : ''
     return `<tr>

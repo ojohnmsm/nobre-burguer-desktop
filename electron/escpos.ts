@@ -171,9 +171,18 @@ export function buildReceiptEscPos(order: ReceiptOrder, width: 32 | 48 = 32): Bu
       for (const l of wrap(nomeItem)) out.push(line(l))
       out.push(line(row('', preco)))
     }
-    const addons = ((item.addon_selections as { selectedOptions: { name: string }[] }[]) || [])
-      .flatMap((a) => a.selectedOptions.map((o) => `  + ${ascii(o.name)}`))
-    for (const a of addons) out.push(line(a))
+    const grupos = (item.addon_selections as { selectedOptions: { name: string }[]; pricingRule?: string; groupPriceCents?: number }[]) || []
+    for (const g of grupos) {
+      if (g.pricingRule && g.pricingRule !== 'sum') {
+        // Sabores de pizza: uma linha com os sabores + a regra + o preço.
+        const nomes = g.selectedOptions.map((o) => ascii(o.name)).join(' / ')
+        const rot = g.pricingRule === 'average' ? 'media' : 'maior'
+        for (const l of wrap(`  ${nomes} (${rot})`)) out.push(line(l))
+        out.push(line(row('', R(g.groupPriceCents ?? 0))))
+      } else {
+        for (const o of g.selectedOptions) out.push(line(`  + ${ascii(o.name)}`))
+      }
+    }
     if (item.notes) out.push(line(`  obs: ${ascii(item.notes)}`, { bold: true }))
   }
 
