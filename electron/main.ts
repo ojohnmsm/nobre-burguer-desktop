@@ -581,7 +581,7 @@ ${isIfood && typeof ep?.total?.orderAmount === 'number'
 
 <hr class="sep">
 
-<p class="bold">Pagto: ${PAYMENT_LABELS[order.payment_method as string] || h(order.payment_method)}</p>
+<p class="bold">Pagto: ${PAYMENT_LABELS[order.payment_method as string] || h(order.payment_method)}${order.card_on_delivery ? ' (NA ENTREGA)' : ''}</p>
 ${order.change_for_cents ? `<p class="sm">Troco para: ${R(order.change_for_cents as number)}</p>` : ''}
 ${order.notes ? `<hr class="sep"><p class="bold">Obs:</p><p class="sm">${h(order.notes)}</p>` : ''}
 

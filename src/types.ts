@@ -49,6 +49,8 @@ export interface Order {
   delivery_fee_cents: number
   total_cents: number
   payment_method: string
+  /** Cartao sera passado na maquininha, na entrega. */
+  card_on_delivery?: boolean
   change_for_cents: number | null
   status: OrderStatus
   notes: string | null

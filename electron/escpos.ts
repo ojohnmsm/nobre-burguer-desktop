@@ -81,7 +81,14 @@ function layout(width: number) {
 const PAYMENT: Record<string, string> = {
   pix: 'Pix', cash: 'Dinheiro', credit_card: 'Credito', debit_card: 'Debito',
   meal_voucher: 'Vale Ref.', food_voucher: 'Vale Alim.', ifood_online: 'Pago no iFood',
-  card_on_delivery: 'Cartao na entrega',
+}
+
+// Cartao tem dois caminhos: cobrado online (pedido ja pago) ou na maquininha,
+// na entrega. Sem esta marca a comanda sai igual nos dois casos e o entregador
+// pode sair sem a maquina.
+function rotuloPagamento(order: ReceiptOrder): string {
+  const base = PAYMENT[order.payment_method as string] || ascii(order.payment_method)
+  return order.card_on_delivery ? `${base} (NA ENTREGA)` : base
 }
 
 type ReceiptOrder = Record<string, unknown>
@@ -200,7 +207,7 @@ export function buildReceiptEscPos(order: ReceiptOrder, width: 32 | 48 = 32): Bu
     }
     out.push(line(row('Cliente pagou', Rf(ep.total.orderAmount)), { bold: true }))
   }
-  out.push(line(`Pagto: ${PAYMENT[order.payment_method as string] || ascii(order.payment_method)}`, { bold: true }))
+  out.push(line(`Pagto: ${rotuloPagamento(order)}`, { bold: true }))
   if (order.change_for_cents) out.push(line(`Troco para: ${R(order.change_for_cents as number)}`))
   if (order.notes) {
     out.push(line(div))

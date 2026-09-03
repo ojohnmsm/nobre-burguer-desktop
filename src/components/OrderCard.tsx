@@ -128,7 +128,7 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
             {!compact && <>{order.order_items.length} {order.order_items.length === 1 ? 'item' : 'itens'}</>}
             {/* Pedido do iFood é sempre "pago no iFood" — a linha de pagamento
                 só polui o card. */}
-            {!isIfood && <>{!compact && ' · '}{PAYMENT_LABELS[order.payment_method] || order.payment_method}</>}
+            {!isIfood && <>{!compact && ' · '}{PAYMENT_LABELS[order.payment_method] || order.payment_method}{order.card_on_delivery && ' (na entrega)'}</>}
           </p>
           {!isTerminal && preparo.alvoISO && (
             <p className={`text-xs mt-0.5 flex items-center gap-1 ${
