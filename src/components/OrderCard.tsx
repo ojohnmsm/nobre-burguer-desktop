@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronUp, Printer, Clock, Phone, MapPin, MessageSquare } from 'lucide-react'
-import { Order, OrderStatus, STATUS_LABELS, PAYMENT_LABELS, fmtMoney, timeAgo } from '../types'
+import { Order, OrderStatus, STATUS_LABELS, PAYMENT_LABELS, fmtMoney, timeAgo , ehMarketplace} from '../types'
 import { orderLabel } from '../orderLabel'
 import { origemDoPedido, proximaEtapa } from '../orderFlow'
 import { horaLocal, iconeVeiculo, nivelUrgencia, preparoInfo, textoEntregador } from '../orderTiming'
@@ -28,13 +28,15 @@ interface Props {
 export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, compact = false }: Props) {
   const [open, setOpen] = useState(false)
   const isIfood = order.channel === 'ifood'
+  // Vale para qualquer marketplace; `isIfood` fica só para o que é do iFood.
+  const doMarketplace = ehMarketplace(order.channel)
   const isTerminal = order.status === 'delivered' || order.status === 'cancelled'
   // A COZINHA já terminou com este pedido? Terminal, ou pedido do iFood que
   // saiu do preparo — daí em diante o motoboy é problema do iFood, não da
   // cozinha. A contagem CONGELA no instante em que saiu do preparo
   // (updated_at), em vez de correr para sempre.
   const cozinhaConcluiu = isTerminal
-    || (isIfood && (order.status === 'ready_to_pickup' || order.status === 'out_for_delivery'))
+    || (doMarketplace && (order.status === 'ready_to_pickup' || order.status === 'out_for_delivery'))
   const fim = cozinhaConcluiu ? new Date(order.updated_at).getTime() : Date.now()
   const ago = timeAgo(order.created_at, fim)
   const isOld = !cozinhaConcluiu && (fim - new Date(order.created_at).getTime()) > 30 * 60000
@@ -128,7 +130,7 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
             {!compact && <>{order.order_items.length} {order.order_items.length === 1 ? 'item' : 'itens'}</>}
             {/* Pedido do iFood é sempre "pago no iFood" — a linha de pagamento
                 só polui o card. */}
-            {!isIfood && <>{!compact && ' · '}{PAYMENT_LABELS[order.payment_method] || order.payment_method}{order.card_on_delivery && ' (na entrega)'}</>}
+            {!doMarketplace && <>{!compact && ' · '}{PAYMENT_LABELS[order.payment_method] || order.payment_method}{order.card_on_delivery && ' (na entrega)'}</>}
           </p>
           {!isTerminal && preparo.alvoISO && (
             <p className={`text-xs mt-0.5 flex items-center gap-1 ${

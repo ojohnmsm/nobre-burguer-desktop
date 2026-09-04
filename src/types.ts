@@ -131,3 +131,12 @@ export function timeAgo(iso: string, ate?: number) {
   if (diff < 60) return `${diff}min`
   return `${Math.floor(diff / 60)}h${diff % 60 > 0 ? String(diff % 60).padStart(2, '0') : ''}`
 }
+
+/**
+ * Canais em que a LOJA não manda no status sozinha — quem decide é o
+ * marketplace. Espelha lib/order-flow.ts do app web; sem isto o balcão
+ * ofereceria botão de etapa que o marketplace vai ignorar.
+ */
+export function ehMarketplace(channel: string | null | undefined): boolean {
+  return channel === 'ifood' || channel === '99food'
+}
