@@ -43,6 +43,23 @@ const CMD = {
 
 type LineOpts = { center?: boolean; bold?: boolean; double?: boolean }
 
+/**
+ * Uma linha da comanda, ainda sem saber como vai ser impressa.
+ *
+ * Existe porque havia DUAS comandas mantidas em paralelo: esta, em ESC/POS, e
+ * uma em HTML no main.ts, usada como reserva quando o ESC/POS falha. Elas
+ * divergiram — dinheiro formatado diferente, outro texto de fecho, e, o que
+ * importa de verdade, a de HTML nunca imprimia a observacao POR ITEM. O cliente
+ * pedia sem cebola e a cozinha nao ficava sabendo, mas so nos dias em que a
+ * reserva entrava. Agora o conteudo nasce aqui, uma vez, e cada meio so o
+ * desenha.
+ */
+export interface ReceiptLine extends LineOpts {
+  text: string
+}
+
+const ln = (text: string, opts: LineOpts = {}): ReceiptLine => ({ text, ...opts })
+
 function line(text: string, opts: LineOpts = {}): Buffer {
   const parts: Buffer[] = [opts.center ? CMD.alignCenter : CMD.alignLeft]
   if (opts.bold) parts.push(CMD.boldOn)
@@ -100,7 +117,7 @@ interface IfoodPayload {
   total?: { orderAmount?: number; benefits?: number }
 }
 
-export function buildReceiptEscPos(order: ReceiptOrder, width: 32 | 48 = 32): Buffer {
+export function buildReceiptLines(order: ReceiptOrder, width: 32 | 48 = 32): ReceiptLine[] {
   const { ctr, row, wrap, div, dbl } = layout(width)
   const R = (cents: number) => 'R$' + (Number(cents) / 100).toFixed(2).replace('.', ',')
   /** Reais decimais (o iFood manda assim no total), não centavos. */
@@ -132,51 +149,51 @@ export function buildReceiptEscPos(order: ReceiptOrder, width: 32 | 48 = 32): Bu
     ascii(order.city), order.state ? '/' + ascii(order.state) : '',
   ].join('')
 
-  const out: Buffer[] = [CMD.init]
+  const out: ReceiptLine[] = []
 
-  out.push(line('*** COMANDA ***', { center: true, bold: true }))
-  if (nomeLoja) out.push(line(nomeLoja, { center: true, bold: true }))
-  out.push(line(`Pedido: ${date}`, { center: true }))
-  out.push(line(`--- ${origemLabel(order.channel as string)} ---`, { center: true, bold: true }))
-  out.push(line(div))
+  out.push(ln('*** COMANDA ***', { center: true, bold: true }))
+  if (nomeLoja) out.push(ln(nomeLoja, { center: true, bold: true }))
+  out.push(ln(`Pedido: ${date}`, { center: true }))
+  out.push(ln(`--- ${origemLabel(order.channel as string)} ---`, { center: true, bold: true }))
+  out.push(ln(div))
 
   // Número do pedido em destaque (dobro de altura).
-  out.push(line(`#${orderLabel(order as never)}`, { bold: true, double: true }))
+  out.push(ln(`#${orderLabel(order as never)}`, { bold: true, double: true }))
   if (isIfood && order.ifood_pickup_code) {
-    out.push(line(`Codigo de coleta: ${ascii(order.ifood_pickup_code)}`, { bold: true }))
+    out.push(ln(`Codigo de coleta: ${ascii(order.ifood_pickup_code)}`, { bold: true }))
   }
-  out.push(line(ascii(order.customer_name)))
-  out.push(line(ascii(order.customer_phone)))
+  out.push(ln(ascii(order.customer_name)))
+  out.push(ln(ascii(order.customer_phone)))
   if (nPedidosCliente !== null) {
-    out.push(line(
+    out.push(ln(
       nPedidosCliente <= 0
         ? 'Cliente novo na loja'
         : `Cliente: ${nPedidosCliente} pedido${nPedidosCliente === 1 ? '' : 's'} na loja`,
       { bold: nPedidosCliente <= 0 }
     ))
   }
-  out.push(line(div))
+  out.push(ln(div))
 
   if (isPickup) {
-    out.push(line('*** RETIRADA ***', { center: true, bold: true }))
-    for (const l of wrap(`RETIRAR EM: ${pickupAddress || 'CONFIRMAR COM A LOJA'}`)) out.push(line(l))
+    out.push(ln('*** RETIRADA ***', { center: true, bold: true }))
+    for (const l of wrap(`RETIRAR EM: ${pickupAddress || 'CONFIRMAR COM A LOJA'}`)) out.push(ln(l))
   } else {
-    for (const l of wrap(addrLine)) out.push(line(l))
-    for (const l of wrap(cityLine)) out.push(line(l))
+    for (const l of wrap(addrLine)) out.push(ln(l))
+    for (const l of wrap(cityLine)) out.push(ln(l))
   }
-  out.push(line(div))
+  out.push(ln(div))
 
   for (const item of items) {
     const tam = item.variation_name ? ` ${ascii(item.variation_name as string)}` : ''
     const nomeItem = `${item.quantity}x ${ascii(item.product_name)}${tam}`
     const preco = R(item.subtotal_cents as number)
     if (nomeItem.length + preco.length + 1 <= width) {
-      out.push(line(row(nomeItem, preco)))
+      out.push(ln(row(nomeItem, preco)))
     } else {
       // Nome longo: QUEBRA em linhas próprias (não corta) e o preço à direita
       // logo abaixo.
-      for (const l of wrap(nomeItem)) out.push(line(l))
-      out.push(line(row('', preco)))
+      for (const l of wrap(nomeItem)) out.push(ln(l))
+      out.push(ln(row('', preco)))
     }
     const grupos = (item.addon_selections as { selectedOptions: { name: string }[]; pricingRule?: string; groupPriceCents?: number }[]) || []
     for (const g of grupos) {
@@ -184,41 +201,102 @@ export function buildReceiptEscPos(order: ReceiptOrder, width: 32 | 48 = 32): Bu
         // Sabores de pizza: uma linha com os sabores + a regra + o preço.
         const nomes = g.selectedOptions.map((o) => ascii(o.name)).join(' / ')
         const rot = g.pricingRule === 'average' ? 'media' : 'maior'
-        for (const l of wrap(`  ${nomes} (${rot})`)) out.push(line(l))
-        out.push(line(row('', R(g.groupPriceCents ?? 0))))
+        for (const l of wrap(`  ${nomes} (${rot})`)) out.push(ln(l))
+        out.push(ln(row('', R(g.groupPriceCents ?? 0))))
       } else {
-        for (const o of g.selectedOptions) out.push(line(`  + ${ascii(o.name)}`))
+        for (const o of g.selectedOptions) out.push(ln(`  + ${ascii(o.name)}`))
       }
     }
-    if (item.notes) out.push(line(`  obs: ${ascii(item.notes)}`, { bold: true }))
+    if (item.notes) out.push(ln(`  obs: ${ascii(item.notes)}`, { bold: true }))
   }
 
-  out.push(line(div))
-  out.push(line(row('Subtotal', R(order.subtotal_cents as number))))
-  out.push(line(row(isPickup ? 'Retirada' : 'Entrega', R(order.delivery_fee_cents as number))))
-  out.push(line(dbl))
-  out.push(line(row('TOTAL', R(order.total_cents as number)), { bold: true }))
-  out.push(line(dbl))
+  out.push(ln(div))
+  out.push(ln(row('Subtotal', R(order.subtotal_cents as number))))
+  out.push(ln(row(isPickup ? 'Retirada' : 'Entrega', R(order.delivery_fee_cents as number))))
+  out.push(ln(dbl))
+  out.push(ln(row('TOTAL', R(order.total_cents as number)), { bold: true }))
+  out.push(ln(dbl))
   // iFood: quanto o cliente efetivamente pagou (com desconto/cupom e taxa do
   // iFood), que é diferente do que a loja recebe (o TOTAL acima).
   if (isIfood && typeof ep?.total?.orderAmount === 'number') {
     if (typeof ep.total.benefits === 'number' && ep.total.benefits > 0) {
-      out.push(line(row('Desconto iFood', '-' + Rf(ep.total.benefits))))
+      out.push(ln(row('Desconto iFood', '-' + Rf(ep.total.benefits))))
     }
-    out.push(line(row('Cliente pagou', Rf(ep.total.orderAmount)), { bold: true }))
+    out.push(ln(row('Cliente pagou', Rf(ep.total.orderAmount)), { bold: true }))
   }
-  out.push(line(`Pagto: ${rotuloPagamento(order)}`, { bold: true }))
-  if (order.change_for_cents) out.push(line(`Troco para: ${R(order.change_for_cents as number)}`))
+  out.push(ln(`Pagto: ${rotuloPagamento(order)}`, { bold: true }))
+  if (order.change_for_cents) out.push(ln(`Troco para: ${R(order.change_for_cents as number)}`))
   if (order.notes) {
-    out.push(line(div))
-    out.push(line('Obs:', { bold: true }))
-    for (const l of wrap(String(order.notes))) out.push(line(l))
+    out.push(ln(div))
+    out.push(ln('Obs:', { bold: true }))
+    for (const l of wrap(String(order.notes))) out.push(ln(l))
   }
-  out.push(line(div))
-  out.push(line('Obrigado!', { center: true }))
+  out.push(ln(div))
+  out.push(ln('Obrigado!', { center: true }))
 
-  out.push(CMD.feedCut)
-  return Buffer.concat(out)
+  return out
+}
+
+/** Desenha as linhas como bytes ESC/POS — o caminho primario. */
+export function buildReceiptEscPos(order: ReceiptOrder, width: 32 | 48 = 32): Buffer {
+  const partes: Buffer[] = [CMD.init]
+  for (const l of buildReceiptLines(order, width)) partes.push(line(l.text, l))
+  partes.push(CMD.feedCut)
+  return Buffer.concat(partes)
+}
+
+/**
+ * A reserva: as MESMAS linhas da comanda, desenhadas pelo Chromium.
+ *
+ * Antes isto era um segundo cupom, com layout, fonte, formato de dinheiro e
+ * texto de fecho proprios — e sem a observacao POR ITEM, que simplesmente sumia
+ * nos dias em que a reserva entrava. Agora e um <pre> monoespacado sobre
+ * `buildReceiptLines`: o que sai por aqui e, caractere por caractere, o que
+ * sairia pelo ESC/POS. Cupom diferente confunde quem monta o pedido, e a
+ * cozinha nao tem por que saber qual caminho de impressao funcionou hoje.
+ */
+export function buildReceiptHtml(order: Record<string, unknown>, widthCols: 32 | 48): string {
+  const h = (s: unknown) => String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+  const pageWidthMm = widthCols === 48 ? 80 : 58
+
+  const linhas = buildReceiptLines(order, widthCols)
+    .map((l) => {
+      const classes = [
+        l.center ? 'c' : '',
+        l.bold ? 'b' : '',
+        l.double ? 'd' : '',
+      ].filter(Boolean).join(' ')
+      // Linha vazia precisa de conteudo para ocupar altura no <pre>.
+      const texto = h(l.text).length > 0 ? h(l.text) : '&nbsp;'
+      return `<span class="${classes}">${texto}</span>`
+    })
+    .join('')
+
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  @page { size: ${pageWidthMm}mm auto; margin: 0; }
+  html, body { margin: 0 auto; color: #000; }
+  pre {
+    /* A largura em unidades ch amarra o texto a mesma grade de colunas do
+       ESC/POS — ${widthCols} caracteres exatos — em vez de depender de o
+       tamanho em pontos acertar por sorte. */
+    width: ${widthCols}ch;
+    margin: 0 auto;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 9pt;
+    line-height: 1.25;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  span   { display: block; }
+  .c     { text-align: center; }
+  .b     { font-weight: bold; }
+  .d     { font-size: 15pt; font-weight: bold; line-height: 1.1; }
+</style>
+</head><body><pre>${linhas}</pre></body></html>`
 }
 
 // ── Envio RAW ao spooler ────────────────────────────────────────────────────
