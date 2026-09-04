@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   getStores:           ()                                          => ipcRenderer.invoke('get-stores'),
   addConnection:       (url: string, token: string)                 => ipcRenderer.invoke('add-connection', url, token),
+  pairDevice:          (url: string, code: string)                  => ipcRenderer.invoke('pair-device', url, code),
   removeConnection:    (id: string)                                 => ipcRenderer.invoke('remove-connection', id),
   getWhatsappStatus:   ()                                          => ipcRenderer.invoke('get-whatsapp-status'),
   getWhatsappMessages: (conversationId: string)                   => ipcRenderer.invoke('get-whatsapp-messages', conversationId),

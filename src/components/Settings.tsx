@@ -47,6 +47,11 @@ export function Settings({ onSaved }: Props) {
   const [showToken, setShowToken] = useState(false)
   const [novaUrl, setNovaUrl] = useState('')
   const [mostrarAvancado, setMostrarAvancado] = useState(false)
+  const [codigo, setCodigo] = useState('')
+  const [pareando, setPareando] = useState(false)
+  // O campo do código LONGO some por padrão. Ele existe para quem já tinha o
+  // token antigo anotado; o caminho normal agora é o de 8 caracteres.
+  const [mostrarCodigoLongo, setMostrarCodigoLongo] = useState(false)
 
   useEffect(() => {
     window.api.getConfig().then(setConfig).catch(() => setError('Não foi possível ler as configurações'))
@@ -73,6 +78,23 @@ export function Settings({ onSaved }: Props) {
     // Avisa a tela principal: ela precisa buscar os pedidos da loja nova e
     // perguntar o nome dela ao servidor.
     onSaved()
+  }
+
+  /** Caminho normal: 8 caracteres digitados aqui viram o token no cofre. */
+  async function parearAparelho() {
+    setError('')
+    setPareando(true)
+    try {
+      const resultado = await window.api.pairDevice(novaUrl, codigo)
+      if (resultado.erro) { setError(resultado.erro); return }
+
+      setNovaUrl('')
+      setCodigo('')
+      await recarregar()
+      onSaved()
+    } finally {
+      setPareando(false)
+    }
   }
 
   async function removerLoja(id: string, nome: string) {
@@ -171,34 +193,59 @@ export function Settings({ onSaved }: Props) {
         <div className="border-t border-[var(--border)] pt-3 space-y-2">
           <p className="text-xs text-[var(--text-muted)] font-medium">Ligar outra loja</p>
 
-          <div className="relative">
-            <input
-              type={showToken ? 'text' : 'password'}
-              placeholder="Código gerado no painel da loja"
-              value={desktopApiKey}
-              onChange={event => setDesktopApiKey(event.target.value)}
-              className="w-full bg-[var(--card)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--text-xmuted)] focus:outline-none focus:border-[var(--primary)] pr-10"
-            />
-            <button
-              type="button"
-              onClick={() => setShowToken(current => !current)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text)]"
-              aria-label={showToken ? 'Ocultar código' : 'Mostrar código'}
-            >
-              {showToken ? <EyeOff size={14} /> : <Eye size={14} />}
-            </button>
-          </div>
+          {/* 8 caracteres, grandes e espaçados: este campo é preenchido por
+              alguém lendo do celular e digitando aqui. O token real tem 47 e
+              nunca passa por esta tela — chega do servidor e vai pro cofre. */}
+          <input
+            inputMode="text"
+            autoCapitalize="characters"
+            spellCheck={false}
+            placeholder="XXXX-XXXX"
+            value={codigo.length > 4 ? `${codigo.slice(0, 4)}-${codigo.slice(4)}` : codigo}
+            onChange={event =>
+              setCodigo(event.target.value.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 8))
+            }
+            onKeyDown={event => {
+              if (event.key === 'Enter' && codigo.length === 8 && !pareando) void parearAparelho()
+            }}
+            className="w-full bg-[var(--card)] border border-[var(--border)] rounded-xl px-4 py-3 text-center font-mono text-xl tracking-[0.25em] text-[var(--text)] placeholder:text-[var(--text-xmuted)] placeholder:tracking-[0.15em] focus:outline-none focus:border-[var(--primary)]"
+          />
 
-          {/* O endereço fica escondido porque o código já diz qual servidor
-              procurar. Só quem roda em instalação própria precisa dele, e essa
-              pessoa sabe que precisa. */}
           <button
             type="button"
-            onClick={() => setMostrarAvancado(v => !v)}
-            className="text-[11px] text-[var(--text-muted)] hover:text-[var(--text)] underline"
+            onClick={parearAparelho}
+            disabled={codigo.length !== 8 || pareando}
+            className="w-full bg-[var(--primary)] hover:bg-[var(--primary-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--primary-fg)] font-semibold rounded-xl py-2.5 text-sm transition-colors"
           >
-            {mostrarAvancado ? 'Esconder' : 'Uso meu próprio servidor'}
+            {pareando ? 'Ligando…' : 'Ligar loja'}
           </button>
+
+          <p className="text-[11px] text-[var(--text-xmuted)] flex gap-1.5">
+            <KeyRound size={12} className="mt-px flex-shrink-0" />
+            No painel da loja, em Integrações, toque em "Ligar um aparelho" e digite
+            aqui o código de 8 caracteres. Duas lojas no mesmo computador recebem
+            pedidos lado a lado.
+          </p>
+
+          <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1">
+            {/* O endereço fica escondido porque o código já diz qual servidor
+                procurar. Só quem roda em instalação própria precisa dele, e essa
+                pessoa sabe que precisa. */}
+            <button
+              type="button"
+              onClick={() => setMostrarAvancado(v => !v)}
+              className="text-[11px] text-[var(--text-muted)] hover:text-[var(--text)] underline"
+            >
+              {mostrarAvancado ? 'Esconder' : 'Uso meu próprio servidor'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setMostrarCodigoLongo(v => !v)}
+              className="text-[11px] text-[var(--text-muted)] hover:text-[var(--text)] underline"
+            >
+              {mostrarCodigoLongo ? 'Esconder' : 'Tenho um código longo'}
+            </button>
+          </div>
 
           {mostrarAvancado && (
             <input
@@ -210,20 +257,35 @@ export function Settings({ onSaved }: Props) {
             />
           )}
 
-          <button
-            type="button"
-            onClick={adicionarLoja}
-            disabled={!desktopApiKey.trim()}
-            className="w-full bg-[var(--primary)] hover:bg-[var(--primary-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--primary-fg)] font-semibold rounded-xl py-2.5 text-sm transition-colors"
-          >
-            Ligar loja
-          </button>
-
-          <p className="text-[11px] text-[var(--text-xmuted)] flex gap-1.5">
-            <KeyRound size={12} className="mt-px flex-shrink-0" />
-            Cole o código gerado em Integrações, no painel da loja. Duas lojas no
-            mesmo computador recebem pedidos lado a lado.
-          </p>
+          {mostrarCodigoLongo && (
+            <div className="space-y-2 rounded-xl border border-[var(--border)] p-3">
+              <div className="relative">
+                <input
+                  type={showToken ? 'text' : 'password'}
+                  placeholder="Código longo (cpd_…)"
+                  value={desktopApiKey}
+                  onChange={event => setDesktopApiKey(event.target.value)}
+                  className="w-full bg-[var(--card)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--text-xmuted)] focus:outline-none focus:border-[var(--primary)] pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowToken(current => !current)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text)]"
+                  aria-label={showToken ? 'Ocultar código' : 'Mostrar código'}
+                >
+                  {showToken ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={adicionarLoja}
+                disabled={!desktopApiKey.trim()}
+                className="w-full bg-[var(--card)] hover:bg-[var(--border)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--text)] font-semibold rounded-xl py-2 text-xs transition-colors border border-[var(--border)]"
+              >
+                Ligar com código longo
+              </button>
+            </div>
+          )}
         </div>
       </section>
 

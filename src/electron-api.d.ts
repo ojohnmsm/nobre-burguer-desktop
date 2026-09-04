@@ -140,6 +140,8 @@ declare global {
       onNewOrder: (callback: (info: { id: string; label: string; canal: string; customerName: string; isPickup: boolean }) => void) => () => void
       getStores: () => Promise<{ id: string; storeName: string | null; online: boolean; ifoodConectado: boolean; ifoodPollingParadoSegundos: number | null }[]>
       addConnection: (url: string, token: string) => Promise<{ erro?: string }>
+      /** Troca o código curto de pareamento pelo token longo e liga a loja. */
+      pairDevice: (url: string, code: string) => Promise<{ erro?: string; storeName?: string | null }>
       removeConnection: (id: string) => Promise<{ ok: boolean }>
       getWhatsappStatus: () => Promise<WhatsappStatusResponse>
       getWhatsappMessages: (conversationId: string) => Promise<WhatsappMessagesResponse>

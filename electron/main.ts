@@ -322,7 +322,7 @@ function saveConfigInput(input: DesktopConfigInput) {
 const SERVIDOR_PADRAO = 'https://www.cardapia.shop'
 
 /** Liga mais uma loja a este computador. */
-function adicionarConexao(apiBaseUrl: string, desktopApiKey: string): { erro?: string } {
+function adicionarConexao(apiBaseUrl: string, desktopApiKey: string, label?: string): { erro?: string } {
   const url = apiBaseUrl.trim().replace(/\/+$/, '') || SERVIDOR_PADRAO
   const token = desktopApiKey.trim()
 
@@ -342,10 +342,54 @@ function adicionarConexao(apiBaseUrl: string, desktopApiKey: string): { erro?: s
     id: `loja-${Date.now().toString(36)}`,
     apiBaseUrl: url,
   }
+  if (label?.trim()) registro.label = label.trim()
   encodeKey(registro, token)
   lista.push(registro)
   writeConnections(lista)
   return {}
+}
+
+/**
+ * Troca o código CURTO de pareamento pelo token longo, e liga a loja.
+ *
+ * É este caminho que resolve a instalação de cozinha: o computador do balcão
+ * costuma não ter navegador, e o token real tem 47 caracteres. Aqui a pessoa
+ * digita 8 e o token nunca aparece na tela — vai direto do servidor para o cofre
+ * do sistema operacional, em `encodeKey`.
+ */
+async function parearPorCodigo(
+  apiBaseUrl: string,
+  codigo: string
+): Promise<{ erro?: string; storeName?: string | null }> {
+  const url = apiBaseUrl.trim().replace(/\/+$/, '') || SERVIDOR_PADRAO
+  const code = codigo.trim().toUpperCase().replace(/[^0-9A-Z]/g, '')
+
+  if (!urlValida(url)) return { erro: 'Endereço inválido' }
+  if (code.length !== 8) return { erro: 'O código tem 8 caracteres' }
+
+  let resposta: Response
+  try {
+    resposta = await fetch(`${url}/api/desktop/parear`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    })
+  } catch {
+    return { erro: 'Não foi possível falar com o servidor. Confira a internet.' }
+  }
+
+  const dados = (await resposta.json().catch(() => null)) as
+    | { token?: string; storeName?: string | null; error?: string }
+    | null
+
+  if (!resposta.ok || !dados?.token) {
+    return { erro: dados?.error ?? 'Código inválido ou expirado' }
+  }
+
+  const { erro } = adicionarConexao(url, dados.token, dados.storeName ?? undefined)
+  if (erro) return { erro }
+
+  return { storeName: dados.storeName ?? null }
 }
 
 function removerConexao(id: string) {
@@ -596,6 +640,10 @@ ipcMain.handle('get-config', () => getConfigView())
 
 ipcMain.handle('add-connection', (_e, apiBaseUrl: string, desktopApiKey: string) => {
   return adicionarConexao(apiBaseUrl, desktopApiKey)
+})
+
+ipcMain.handle('pair-device', async (_e, apiBaseUrl: string, codigo: string) => {
+  return parearPorCodigo(apiBaseUrl, codigo)
 })
 
 ipcMain.handle('remove-connection', (_e, id: string) => {
