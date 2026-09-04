@@ -1,10 +1,11 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, safeStorage, dialog, Notification } from 'electron'
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, safeStorage, dialog, Notification, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs'
 import { randomUUID } from 'crypto'
 import { buildReceiptEscPos, buildReceiptHtml, printRawEscPos, ImpressaoAmbiguaError } from './escpos'
 import { orderLabel, origemLabel } from './receiptFormat'
+import { pastaDoLog, registrar } from './log'
 
 // ── Atualização automática ────────────────────────────────────────────────
 // O instalador e o latest.yml ficam nas releases do GitHub, conforme
@@ -478,7 +479,11 @@ function chromiumPrint(order: Record<string, unknown>, printerName: string, widt
               const message = failureReason
                 ? `${failureReason} (impressora: "${printerName}")`
                 : `Falha desconhecida (impressora: "${printerName}")`
-              mainWindow?.webContents.send('print-error', message)
+              // Só registra. Quem avisa a tela é quem chamou — lá se sabe se a
+              // comanda ainda tem outro caminho para sair, e por isso se sabe se
+              // há algo para o balcão fazer. Avisar aqui mandava a mensagem do
+              // Chromium, em inglês, junto com o nome da fila de impressão.
+              registrar('erro', 'Impressão em HTML recusada pelo Chromium', message)
               cleanup()
               reject(new Error(message))
               return
@@ -512,31 +517,41 @@ async function autoPrintOrder(
   widthCols: 32 | 48,
   vias = 1
 ) {
+  const pedido = `#${orderLabel(order as never)}`
+
   for (let i = 0; i < vias; i += 1) {
     try {
       await printRawEscPos(buildReceiptEscPos(order, widthCols), printerName)
     } catch (escposError) {
       // Dúvida NÃO vira reimpressão. Era isto que dobrava a comanda: o ESC/POS
       // estourava o tempo-limite depois de já ter mandado os bytes, e a reserva
-      // em HTML imprimia por cima. Avisa a tela e para.
+      // em HTML imprimia por cima.
       if (escposError instanceof ImpressaoAmbiguaError) {
-        console.error('ESC/POS sem confirmação — não vou reimprimir em HTML:', escposError)
-        mainWindow?.webContents.send('print-error', escposError.message)
+        registrar('erro', `Impressão sem confirmação do pedido ${pedido}`, escposError)
+        // Aqui o lojista PRECISA agir: pode não ter saído papel nenhum.
+        mainWindow?.webContents.send(
+          'print-error',
+          `Confira se a comanda do pedido ${pedido} saiu. Se não saiu, use Imprimir no cartão.`
+        )
         return
       }
-      // A reserva agora imprime um cupom IDÊNTICO ao do ESC/POS — o que é bom
-      // para a cozinha e ruim para o diagnóstico: era justamente a diferença
-      // no papel (dinheiro com espaço, outro fecho, outra fonte) que denunciava
-      // que o caminho primário estava falhando. Sem aviso, o ESC/POS poderia
-      // ficar quebrado por semanas sem ninguém notar. Então o sinal muda de
-      // lugar: sai do papel e vai para a tela.
-      const motivo = escposError instanceof Error ? escposError.message : String(escposError)
-      console.error('ESC/POS falhou, tentando HTML:', escposError)
-      mainWindow?.webContents.send(
-        'print-error',
-        `A comanda saiu pelo caminho reserva — a impressão direta falhou (${motivo}).`
-      )
-      await chromiumPrint(order, printerName, widthCols)
+
+      // A reserva imprime um cupom IDÊNTICO ao do ESC/POS, então a comanda sai
+      // certa e a cozinha não tem nada a fazer — por isso nada vai para a tela.
+      // O motivo técnico não ajuda quem está montando pedido; vai para o log.
+      registrar('erro', `ESC/POS falhou no pedido ${pedido}, usando a reserva em HTML`, escposError)
+      try {
+        await chromiumPrint(order, printerName, widthCols)
+        registrar('info', `Reserva em HTML imprimiu o pedido ${pedido}`)
+      } catch (htmlError) {
+        // Os DOIS caminhos falharam: não saiu comanda nenhuma. Agora sim é
+        // problema do balcão, e a mensagem diz o que fazer, não o que houve.
+        registrar('erro', `Reserva em HTML também falhou no pedido ${pedido}`, htmlError)
+        mainWindow?.webContents.send(
+          'print-error',
+          `A comanda do pedido ${pedido} não saiu. Use Imprimir no cartão do pedido.`
+        )
+      }
     }
   }
 }
@@ -590,8 +605,11 @@ ipcMain.handle('print-order', async (_e, order: Record<string, unknown>) => {
     await autoPrintOrder(order, cfg.printerName, widthCols)
     return 'ok'
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Falha ao imprimir'
-    mainWindow?.webContents.send('print-error', message)
+    // autoPrintOrder já trata (e avisa) as falhas de impressão que conhece; o
+    // que chega aqui é o inesperado. O motivo vai para o log e a tela recebe a
+    // única coisa acionável: tentar de novo.
+    registrar('erro', 'Falha inesperada ao reimprimir pelo cartão', error)
+    mainWindow?.webContents.send('print-error', 'Não foi possível imprimir. Tente de novo.')
     return 'error'
   }
 })
@@ -987,6 +1005,10 @@ if (!app.requestSingleInstanceLock()) {
 
 // ── App lifecycle ─────────────────────────────────────────────────────────
 app.whenReady().then(() => {
+  // Marca o inicio de cada sessao: sem isto, o log e uma lista de falhas sem
+  // saber qual versao rodava nem onde uma execucao termina e outra comeca.
+  registrar('info', `Cardapia ${app.getVersion()} iniciou`)
+
   Menu.setApplicationMenu(null)
 
   mainWindow = new BrowserWindow({
@@ -1029,6 +1051,10 @@ app.whenReady().then(() => {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Abrir', click: () => mainWindow?.show() },
     { label: 'Verificar atualização', click: () => checkForUpdates(true) },
+    // Como o motivo tecnico da falha de impressao deixou de aparecer na tela,
+    // precisa existir um jeito de chegar nele sem ditar caminho de pasta por
+    // telefone.
+    { label: 'Abrir pasta de logs', click: () => { void shell.openPath(pastaDoLog()) } },
     { type: 'separator' },
     { label: 'Sair', click: () => { isQuitting = true; app.quit() } },
   ]))
