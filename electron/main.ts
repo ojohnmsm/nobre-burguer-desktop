@@ -3,7 +3,7 @@ import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs'
 import { randomUUID } from 'crypto'
-import { buildReceiptEscPos, printRawEscPos } from './escpos'
+import { buildReceiptEscPos, printRawEscPos, ImpressaoAmbiguaError } from './escpos'
 import { orderLabel, origemLabel } from './receiptFormat'
 
 // ── Atualização automática ────────────────────────────────────────────────
@@ -516,6 +516,14 @@ async function autoPrintOrder(
     try {
       await printRawEscPos(buildReceiptEscPos(order, widthCols), printerName)
     } catch (escposError) {
+      // Dúvida NÃO vira reimpressão. Era isto que dobrava a comanda: o ESC/POS
+      // estourava o tempo-limite depois de já ter mandado os bytes, e a reserva
+      // em HTML imprimia por cima. Avisa a tela e para.
+      if (escposError instanceof ImpressaoAmbiguaError) {
+        console.error('ESC/POS sem confirmação — não vou reimprimir em HTML:', escposError)
+        mainWindow?.webContents.send('print-error', escposError.message)
+        return
+      }
       console.error('ESC/POS falhou, tentando HTML:', escposError)
       await chromiumPrint(order, printerName, widthCols)
     }

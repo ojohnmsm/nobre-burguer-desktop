@@ -258,7 +258,31 @@ public class RawPrinter {
 "@
 Add-Type -TypeDefinition $code -Language CSharp
 [RawPrinter]::Send($Printer, $bytes)
+Write-Output "CARDAPIA_OK"
 `.trim()
+
+/** O script confirma o envio escrevendo isto DEPOIS que Send retorna. */
+const SENTINELA = 'CARDAPIA_OK'
+
+/**
+ * A impressão pode ter saído — e pode não ter. Não dá para tentar de novo.
+ *
+ * Existe porque a reserva em HTML transformava esta dúvida em DUAS comandas: o
+ * `Add-Type` recompila o C# a cada impressão, e num PC de cozinha lento isso
+ * mais o custo de abrir o PowerShell passava do tempo-limite. O `execFile`
+ * matava o processo e reportava erro DEPOIS de os bytes já terem ido para o
+ * spooler; o `catch` de quem chama caía no Chromium e imprimia por cima.
+ *
+ * Quem recebe este erro não deve reimprimir sozinho — deve AVISAR. Uma comanda
+ * a menos a pessoa vê no quadro e reimprime pelo cartão; uma a mais é papel
+ * jogado fora todo dia, em silêncio.
+ */
+export class ImpressaoAmbiguaError extends Error {
+  constructor(motivo: string) {
+    super(`Impressão sem confirmação (${motivo}). Confira o papel e reimprima pelo cartão se não saiu.`)
+    this.name = 'ImpressaoAmbiguaError'
+  }
+}
 
 export function printRawEscPos(buffer: Buffer, printerName: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -275,12 +299,32 @@ export function printRawEscPos(buffer: Buffer, printerName: string): Promise<voi
     execFile(
       'powershell',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmpPs, '-BinPath', tmpBin, '-Printer', printerName],
-      { timeout: 20000, windowsHide: true },
-      (err) => {
+      // 45s e não 20s: o Add-Type compila C# a cada chamada, e numa máquina
+      // fraca a primeira impressão do dia é bem mais lenta que as seguintes.
+      { timeout: 45000, windowsHide: true },
+      (err, stdout) => {
         try { unlinkSync(tmpBin) } catch { /* ignore */ }
         try { unlinkSync(tmpPs) } catch { /* ignore */ }
-        if (err) reject(err)
-        else resolve()
+
+        // A SENTINELA MANDA, não o código de saída. Ela só é escrita depois de
+        // WritePrinter ter retornado, então vê-la significa que o cupom saiu —
+        // mesmo que o PowerShell tenha resmungado alguma coisa no fim.
+        if (String(stdout ?? '').includes(SENTINELA)) {
+          resolve()
+          return
+        }
+
+        // Morto pelo tempo-limite: os bytes podem ter chegado ao spooler antes
+        // da facada. É a dúvida que não pode virar reimpressão automática.
+        const morto = Boolean(err && (err as { killed?: boolean }).killed)
+        if (morto) {
+          reject(new ImpressaoAmbiguaError('o Windows demorou demais para responder'))
+          return
+        }
+
+        // Saiu sozinho sem a sentinela: falhou de verdade (impressora errada,
+        // spooler parado, driver ausente). Aqui a reserva em HTML vale.
+        reject(err ?? new Error('ESC/POS terminou sem confirmar o envio'))
       }
     )
   })
