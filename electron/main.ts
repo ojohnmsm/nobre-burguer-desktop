@@ -524,7 +524,18 @@ async function autoPrintOrder(
         mainWindow?.webContents.send('print-error', escposError.message)
         return
       }
+      // A reserva agora imprime um cupom IDÊNTICO ao do ESC/POS — o que é bom
+      // para a cozinha e ruim para o diagnóstico: era justamente a diferença
+      // no papel (dinheiro com espaço, outro fecho, outra fonte) que denunciava
+      // que o caminho primário estava falhando. Sem aviso, o ESC/POS poderia
+      // ficar quebrado por semanas sem ninguém notar. Então o sinal muda de
+      // lugar: sai do papel e vai para a tela.
+      const motivo = escposError instanceof Error ? escposError.message : String(escposError)
       console.error('ESC/POS falhou, tentando HTML:', escposError)
+      mainWindow?.webContents.send(
+        'print-error',
+        `A comanda saiu pelo caminho reserva — a impressão direta falhou (${motivo}).`
+      )
       await chromiumPrint(order, printerName, widthCols)
     }
   }
