@@ -1084,6 +1084,33 @@ ipcMain.handle('mark-whatsapp-conversation-seen', async (_e, conversationId: str
   return true
 })
 
+// ── Uma instância só ──────────────────────────────────────────────────────
+/**
+ * Sem esta trava o Cardapia abria DUAS VEZES — e o defeito só aparecia na
+ * impressora.
+ *
+ * Fechar a janela não encerra o programa: ele se esconde na bandeja (ver
+ * `window-all-closed`). Para quem está no balcão, "fechei o Cardapia" e
+ * "cliquei no atalho de novo" é o gesto mais natural do mundo — e criava um
+ * segundo processo inteiro, com bandeja, polling de 7 em 7 segundos e
+ * impressora próprios. Resultado: DUAS comandas idênticas por pedido, som em
+ * dobro, e nada na tela dizendo o que estava acontecendo.
+ *
+ * Agora a segunda cópia não sobe: ela devolve o foco para a que já está
+ * rodando e sai. `exit(0)` e não `quit()` — `quit()` dispararia os ganchos de
+ * ciclo de vida desta cópia natimorta, e um deles é o que esconde na bandeja.
+ */
+if (!app.requestSingleInstanceLock()) {
+  app.exit(0)
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  })
+}
+
 // ── App lifecycle ─────────────────────────────────────────────────────────
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null)
