@@ -15,6 +15,7 @@ const EMPTY_CONFIG: DesktopConfig = {
   printerWidth: '58',
   autoPrint: 'true',
   autoPrintChannels: 'all',
+  printCopies: '1',
   autoStart: 'true',
 }
 
@@ -115,6 +116,7 @@ export function Settings({ onSaved }: Props) {
       printerWidth: config.printerWidth,
       autoPrint: config.autoPrint,
       autoPrintChannels: config.autoPrintChannels,
+      printCopies: config.printCopies,
       autoStart: config.autoStart,
     }
 
@@ -343,6 +345,24 @@ export function Settings({ onSaved }: Props) {
             </select>
             <p className="text-[11px] text-[var(--text-xmuted)] mt-1">
               Use &quot;Só do site / WhatsApp&quot; se o Gestor de Pedidos do iFood já imprime as comandas dele.
+            </p>
+          </div>
+        )}
+        {config.autoPrint === 'true' && (
+          <div>
+            <label className="block text-xs text-[var(--text-muted)] mb-1 font-medium" htmlFor="print-copies">Vias por pedido</label>
+            <select
+              id="print-copies"
+              value={config.printCopies}
+              onChange={event => update('printCopies', event.target.value)}
+              className="w-full bg-[var(--card)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-sm text-[var(--text)] focus:outline-none focus:border-[var(--primary)]"
+            >
+              <option value="1">1 via — padrão</option>
+              <option value="2">2 vias (cozinha + sacola)</option>
+              <option value="3">3 vias</option>
+            </select>
+            <p className="text-[11px] text-[var(--text-xmuted)] mt-1">
+              Vale só para a impressão automática. Reimprimir pelo cartão do pedido sai sempre com uma via.
             </p>
           </div>
         )}

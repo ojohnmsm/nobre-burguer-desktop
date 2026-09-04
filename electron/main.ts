@@ -265,6 +265,8 @@ interface DesktopConfigInput {
   autoPrint?: string
   /** 'all' | 'own' | 'ifood' — quais canais a impressão automática imprime. */
   autoPrintChannels?: string
+  /** Quantas comandas sair por pedido: '1' a '3'. */
+  printCopies?: string
   autoStart?: string
 }
 
@@ -286,6 +288,7 @@ function getConfigView() {
     printerWidth: config.printerWidth || '58',
     autoPrint: config.autoPrint || 'true',
     autoPrintChannels: config.autoPrintChannels || 'all',
+    printCopies: config.printCopies || '1',
     autoStart: config.autoStart || 'true',
   }
 }
@@ -305,6 +308,7 @@ function saveConfigInput(input: DesktopConfigInput) {
     printerWidth: input.printerWidth ?? current.printerWidth ?? '58',
     autoPrint: input.autoPrint ?? current.autoPrint ?? 'true',
     autoPrintChannels: input.autoPrintChannels ?? current.autoPrintChannels ?? 'all',
+    printCopies: normalizarVias(input.printCopies ?? current.printCopies),
     autoStart: input.autoStart ?? current.autoStart ?? 'true',
   }
   saveConfig(next)
@@ -488,13 +492,33 @@ function chromiumPrint(order: Record<string, unknown>, printerName: string, widt
   })
 }
 
+/**
+ * Vias por pedido, entre 1 e 3.
+ *
+ * Recorta para 1 em qualquer valor estranho (vazio, texto, zero, negativo). O
+ * erro que importa evitar aqui é imprimir DEMAIS: papel gasto e cozinha
+ * confusa. Imprimir de menos a pessoa percebe na hora e reimprime pelo cartão.
+ */
+function normalizarVias(valor: string | undefined): string {
+  const n = Number.parseInt(String(valor ?? '1'), 10)
+  if (!Number.isFinite(n) || n < 1) return '1'
+  return String(Math.min(n, 3))
+}
+
 // ── Entry point: ESC/POS cru primeiro, HTML como reserva ────────────────
-async function autoPrintOrder(order: Record<string, unknown>, printerName: string, widthCols: 32 | 48) {
-  try {
-    await printRawEscPos(buildReceiptEscPos(order, widthCols), printerName)
-  } catch (escposError) {
-    console.error('ESC/POS falhou, tentando HTML:', escposError)
-    await chromiumPrint(order, printerName, widthCols)
+async function autoPrintOrder(
+  order: Record<string, unknown>,
+  printerName: string,
+  widthCols: 32 | 48,
+  vias = 1
+) {
+  for (let i = 0; i < vias; i += 1) {
+    try {
+      await printRawEscPos(buildReceiptEscPos(order, widthCols), printerName)
+    } catch (escposError) {
+      console.error('ESC/POS falhou, tentando HTML:', escposError)
+      await chromiumPrint(order, printerName, widthCols)
+    }
   }
 }
 
@@ -679,6 +703,8 @@ ipcMain.handle('print-order', async (_e, order: Record<string, unknown>) => {
   if (!cfg.printerName) return 'no-printer'
   const widthCols = cfg.printerWidth === '80' ? 48 : 32
   try {
+    // Reimpressão pedida no cartão sai com UMA via de propósito: quem clica
+    // quer a comanda que faltou, não outro par delas.
     await autoPrintOrder(order, cfg.printerName, widthCols)
     return 'ok'
   } catch (error) {
@@ -718,10 +744,30 @@ async function buscarEmTodasAsLojas(caminho: string): Promise<unknown[]> {
     })
   )
 
-  const juntos: unknown[] = []
+  const juntos: Record<string, unknown>[] = []
   resultados.forEach((r, i) => {
-    if (r.status === 'fulfilled') juntos.push(...r.value)
+    if (r.status === 'fulfilled') juntos.push(...(r.value as Record<string, unknown>[]))
     else console.error(`Loja ${conexoes[i].label || conexoes[i].id} indisponível:`, r.reason)
+  })
+
+  // DEDUPE POR ID DO PEDIDO.
+  //
+  // A mesma loja pode ser alcançada por DUAS conexões nesta máquina: desde que
+  // uma loja passou a poder ter vários aparelhos, dá para gerar dois códigos da
+  // mesma loja e ligar os dois aqui. `adicionarConexao` só barra o par
+  // (url, token) idêntico — dois tokens diferentes da mesma loja passam.
+  //
+  // Sem isto o pedido vinha duas vezes: dois cartões na tela, DUAS COMANDAS
+  // impressas e o som tocando em dobro. O id do pedido é um uuid e é único
+  // entre lojas, então id repetido só pode ser o mesmo pedido visto duas vezes.
+  // Fica a primeira ocorrência — a conexão que respondeu primeiro é a que o
+  // cartão vai usar para agir sobre o pedido.
+  const vistos = new Set<string>()
+  const unicos = juntos.filter((pedido) => {
+    const id = String(pedido.id ?? '')
+    if (!id || vistos.has(id)) return false
+    vistos.add(id)
+    return true
   })
 
   // TODAS falharam (rede/servidor fora no boot) → ERRO, não lista vazia. Uma
@@ -734,9 +780,9 @@ async function buscarEmTodasAsLojas(caminho: string): Promise<unknown[]> {
 
   // Ordena por chegada, misturando as lojas. Quem está no balcão reage ao
   // pedido que chegou, não à loja de onde ele veio.
-  return juntos.sort((a, b) => {
-    const da = String((a as Record<string, unknown>).created_at ?? '')
-    const db = String((b as Record<string, unknown>).created_at ?? '')
+  return unicos.sort((a, b) => {
+    const da = String(a.created_at ?? '')
+    const db = String(b.created_at ?? '')
     return db.localeCompare(da)
   })
 }
@@ -783,6 +829,7 @@ async function vigiarPedidosNovos() {
   const autoPrint = cfg.autoPrint !== 'false'
   const canais = cfg.autoPrintChannels || 'all'
   const widthCols = cfg.printerWidth === '80' ? 48 : 32
+  const vias = Number(normalizarVias(cfg.printCopies))
 
   for (const p of novos) {
     // Um pedido que só "apareceu" na lista mas é de horas atrás não é novo.
@@ -811,7 +858,7 @@ async function vigiarPedidosNovos() {
     // Impressão — o processo principal é o dono; o renderer não imprime mais.
     if (autoPrint && cfg.printerName && deveImprimirCanal(canal, canais)) {
       try {
-        await autoPrintOrder(p, cfg.printerName, widthCols)
+        await autoPrintOrder(p, cfg.printerName, widthCols, vias)
       } catch (err) {
         console.error('Falha ao imprimir pedido novo (vigia principal):', err)
       }

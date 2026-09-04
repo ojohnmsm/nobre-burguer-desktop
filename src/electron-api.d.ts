@@ -10,6 +10,8 @@ export interface DesktopConfig {
   autoPrint: string
   /** 'all' | 'own' | 'ifood' — quais canais a impressão automática imprime. */
   autoPrintChannels: string
+  /** Vias impressas por pedido novo: '1' a '3'. */
+  printCopies: string
   autoStart: string
 }
 
@@ -24,6 +26,7 @@ export interface DesktopConfigInput {
   printerWidth?: string
   autoPrint?: string
   autoPrintChannels?: string
+  printCopies?: string
   autoStart?: string
 }
 
