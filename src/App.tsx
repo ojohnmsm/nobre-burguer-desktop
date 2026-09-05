@@ -70,62 +70,71 @@ export default function App() {
     notificationTimerRef.current = window.setTimeout(() => setNotifications([]), 6000)
   }, [])
 
+  // Aplica uma lista fresca de pedidos ao estado — merge otimista, som de
+  // entregador chegou, etc. Separado de loadOrders() porque hoje há DUAS
+  // origens para essa lista: um fetch sob demanda (loadOrders) e o push do
+  // processo principal (ver a assinatura de 'pedidos-atualizados' abaixo),
+  // que já vem pronta e não precisa de outro fetch.
+  const aplicarPedidosRecebidos = useCallback((data: Order[]) => {
+    const operationalOrders = data.filter(isOperationalOrder)
+
+    // Segura a posição otimista de pedido de marketplace até o servidor
+    // alcançar (evento chegou) ou o prazo de 90s estourar.
+    const agoraMerge = Date.now()
+    const idsAtuais = new Set(operationalOrders.map(o => o.id))
+    for (const idOpt of [...optimisticRef.current.keys()]) {
+      if (!idsAtuais.has(idOpt)) optimisticRef.current.delete(idOpt)
+    }
+    const comOtimista = operationalOrders.map(order => {
+      const opt = optimisticRef.current.get(order.id)
+      if (!opt) return order
+      if (rankStatus(order.status) >= rankStatus(opt.status) || agoraMerge - opt.ts > 90_000) {
+        optimisticRef.current.delete(order.id)
+        return order
+      }
+      return { ...order, status: opt.status }
+    })
+
+    setOrders(comOtimista)
+    hasLoadedOrdersRef.current = true
+
+    // Pedido NOVO (alerta sonoro + toast + impressão) é responsabilidade do
+    // PROCESSO PRINCIPAL agora (evento 'novo-pedido'), porque o timer do
+    // renderer para quando a janela está minimizada / na bandeja. Aqui só
+    // atualizamos o kanban na tela.
+
+    // Som de "entregador chegou": na transição para o estágio na_loja, uma
+    // vez por pedido. A primeira aparição não conta — só quando já vimos o
+    // entregador antes noutro estágio.
+    const novoStages = new Map<string, string>()
+    let entregadorChegou = false
+    for (const order of operationalOrders) {
+      const estagio = order.ifood_driver?.estagio
+      if (!estagio) continue
+      const anterior = driverStageRef.current.get(order.id)
+      if (estagio === 'na_loja' && anterior && anterior !== 'na_loja') entregadorChegou = true
+      novoStages.set(order.id, estagio)
+    }
+    driverStageRef.current = novoStages
+    if (entregadorChegou) {
+      playDriverArrivedAlert()
+      addNotification('🛵 Entregador do iFood chegou na loja')
+    }
+  }, [addNotification])
+
   const loadOrders = useCallback(async () => {
     if (!hasLoadedOrdersRef.current) setLoading(true)
 
     try {
       const data = await window.api.fetchOrders()
-      const operationalOrders = data.filter(isOperationalOrder)
-
-      // Segura a posição otimista de pedido do iFood até o servidor alcançar
-      // (evento chegou) ou o prazo de 90s estourar.
-      const agoraMerge = Date.now()
-      const idsAtuais = new Set(operationalOrders.map(o => o.id))
-      for (const idOpt of [...optimisticRef.current.keys()]) {
-        if (!idsAtuais.has(idOpt)) optimisticRef.current.delete(idOpt)
-      }
-      const comOtimista = operationalOrders.map(order => {
-        const opt = optimisticRef.current.get(order.id)
-        if (!opt) return order
-        if (rankStatus(order.status) >= rankStatus(opt.status) || agoraMerge - opt.ts > 90_000) {
-          optimisticRef.current.delete(order.id)
-          return order
-        }
-        return { ...order, status: opt.status }
-      })
-
-      setOrders(comOtimista)
-      hasLoadedOrdersRef.current = true
-
-      // Pedido NOVO (alerta sonoro + toast + impressão) é responsabilidade do
-      // PROCESSO PRINCIPAL agora (evento 'novo-pedido'), porque o timer do
-      // renderer para quando a janela está minimizada / na bandeja. Aqui só
-      // atualizamos o kanban na tela.
-
-      // Som de "entregador chegou": na transição para o estágio na_loja, uma
-      // vez por pedido. A primeira aparição não conta — só quando já vimos o
-      // entregador antes noutro estágio.
-      const novoStages = new Map<string, string>()
-      let entregadorChegou = false
-      for (const order of operationalOrders) {
-        const estagio = order.ifood_driver?.estagio
-        if (!estagio) continue
-        const anterior = driverStageRef.current.get(order.id)
-        if (estagio === 'na_loja' && anterior && anterior !== 'na_loja') entregadorChegou = true
-        novoStages.set(order.id, estagio)
-      }
-      driverStageRef.current = novoStages
-      if (entregadorChegou) {
-        playDriverArrivedAlert()
-        addNotification('🛵 Entregador do iFood chegou na loja')
-      }
+      aplicarPedidosRecebidos(data)
     } catch {
       if (!hasLoadedOrdersRef.current) setOrders([])
       addNotification('Não foi possível atualizar os pedidos')
     } finally {
       setLoading(false)
     }
-  }, [addNotification])
+  }, [addNotification, aplicarPedidosRecebidos])
 
   const readConfig = useCallback(async () => {
     const config = await window.api.getConfig()
@@ -168,7 +177,10 @@ export default function App() {
         : ''
       const retirada = info.isPickup ? 'RETIRADA — ' : ''
       addNotification(`🔔 ${retirada}${origem}Novo pedido #${info.label} — ${info.customerName}`)
-      void loadOrders()
+      // Sem fetch aqui: o processo principal já manda 'pedidos-atualizados'
+      // com a lista fresca ANTES deste evento, no mesmo ciclo (ver
+      // vigiarPedidosNovos em main.ts) — buscar de novo seria a mesma
+      // duplicação que este push existe para eliminar.
     })
 
     return () => {
@@ -179,11 +191,14 @@ export default function App() {
     }
   }, [addNotification, loadOrders, readConfig])
 
+  // Kanban ao vivo: o processo principal busca (uma vez, para os dois) e
+  // empurra a lista pronta por aqui — o renderer não faz mais o próprio
+  // polling de /api/desktop/orders. Ver a doc de vigiarPedidosNovos em
+  // main.ts para o motivo (dobrava as requisições sem necessidade).
   useEffect(() => {
     if (!configured) return
-    const interval = window.setInterval(() => { void loadOrders() }, 7000)
-    return () => window.clearInterval(interval)
-  }, [configured, loadOrders])
+    return window.api.onOrdersUpdated(data => aplicarPedidosRecebidos(data))
+  }, [configured, aplicarPedidosRecebidos])
 
   // Reconsulta o estado das lojas (nome, online, saúde do polling do iFood)
   // periodicamente — é o que alimenta os chips de "sem conexão" na barra.

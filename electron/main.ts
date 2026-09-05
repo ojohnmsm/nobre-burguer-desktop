@@ -399,6 +399,11 @@ async function parearPorCodigo(
 
 function removerConexao(id: string) {
   writeConnections(readConnections().filter((c) => c.id !== id))
+  // Sem isto, o cache de ETag desta conexão fica pra sempre no Map, sem
+  // nenhum lookup futuro que o alcance — inofensivo, mas por que deixar.
+  for (const chave of [...cacheEtagPedidos.keys()]) {
+    if (chave.startsWith(`${id}:`)) cacheEtagPedidos.delete(chave)
+  }
 }
 
 function getDesktopConnection() {
@@ -621,6 +626,58 @@ interface BuscaResultado {
 }
 
 /**
+ * Cache de ETag por (conexão, caminho) — histórico paginado e o kanban usam o
+ * mesmo mecanismo, cada página com sua própria chave.
+ */
+const cacheEtagPedidos = new Map<string, { etag: string; pedidos: Record<string, unknown>[] }>()
+
+/**
+ * Busca pedidos com resposta condicional: manda o ETag da última vez, e a
+ * rota devolve 304 sem corpo quando nada mudou desde então — sem passar pela
+ * consulta cara (order_items, entregador do iFood, prep target). Na prática a
+ * maioria dos ciclos do vigia não encontra nada novo, então a maioria das
+ * respostas vira só um 304 vazio.
+ *
+ * Separado de desktopRequest() de propósito: aquele é genérico para todas as
+ * rotas do desktop, e só esta entende ETag — misturar o cache aqui dentro
+ * complicaria o contrato das outras dezenas de chamadas que não têm nada a
+ * ver com isso.
+ */
+async function buscarPedidosComEtag(
+  conexao: StoreConnection,
+  caminho: string
+): Promise<Record<string, unknown>[]> {
+  const chave = `${conexao.id}:${caminho}`
+  const cache = cacheEtagPedidos.get(chave)
+
+  const headers = new Headers({ Authorization: `Bearer ${conexao.desktopApiKey}` })
+  if (cache) headers.set('If-None-Match', cache.etag)
+
+  const response = await fetch(`${conexao.apiBaseUrl}${caminho}`, { headers })
+
+  if (response.status === 304 && cache) return cache.pedidos
+
+  const payload = await response.json().catch(() => null) as { error?: string } | Record<string, unknown>[] | null
+
+  if (!response.ok) {
+    const message = payload && typeof payload === 'object' && !Array.isArray(payload) && 'error' in payload
+      ? String(payload.error)
+      : `Servidor respondeu ${response.status}`
+    throw new Error(message)
+  }
+
+  const pedidos = (payload ?? []) as Record<string, unknown>[]
+  const etag = response.headers.get('etag')
+  // Sem ETag na resposta (servidor antigo, ou algo mudou de contrato): não
+  // guarda nada, pra nunca arriscar mandar um If-None-Match que compare contra
+  // o corpo errado.
+  if (etag) cacheEtagPedidos.set(chave, { etag, pedidos })
+  else cacheEtagPedidos.delete(chave)
+
+  return pedidos
+}
+
+/**
  * Busca em TODAS as lojas ligadas e junta o resultado.
  *
  * Cada pedido sai daqui carregando de qual conexão veio. Sem isso, apertar
@@ -644,7 +701,7 @@ async function buscarComStatusPorConexao(caminho: string): Promise<BuscaResultad
 
   const resultados = await Promise.allSettled(
     conexoes.map(async (conexao) => {
-      const pedidos = await desktopRequest<Record<string, unknown>[]>(caminho, {}, conexao.id)
+      const pedidos = await buscarPedidosComEtag(conexao, caminho)
       return pedidos.map((pedido) => ({
         ...pedido,
         connectionId: conexao.id,
@@ -727,6 +784,39 @@ const pedidosVistosMain = new Map<string, Set<string>>()
 let primeiraVarreduraMain = true
 const NOVO_PEDIDO_RECENTE_MS = 20 * 60 * 1000
 
+// ── Ritmo do vigia ────────────────────────────────────────────────────────
+// Rápido (7s) enquanto há movimento; devagar (25s) depois de um tempo sem
+// pedido novo — loja fechada ou de madrugada não precisa da mesma frequência
+// do horário de pico. Corta pela metade as requisições do balcão pro servidor
+// nesses períodos. Trade-off aceito: um pedido que chegar bem no início de uma
+// janela ociosa pode demorar até ~18s a mais que hoje para acender o alarme da
+// cozinha, no pior caso — só nesse período, nunca durante movimento.
+let vigiaEmAndamento = false
+let ultimoPedidoNovoEm = Date.now()
+let timerVigia: ReturnType<typeof setTimeout> | null = null
+const INTERVALO_ATIVO_MS = 7_000
+const INTERVALO_OCIOSO_MS = 25_000
+const JANELA_ATIVIDADE_MS = 10 * 60 * 1000
+
+function agendarVigiaDePedidos() {
+  if (timerVigia) clearTimeout(timerVigia)
+  const ocioso = Date.now() - ultimoPedidoNovoEm > JANELA_ATIVIDADE_MS
+  timerVigia = setTimeout(async () => {
+    // Não empilha: se o ciclo anterior ainda não terminou (servidor lento),
+    // este tick só reagenda — evita duas buscas da mesma loja em voo ao
+    // mesmo tempo.
+    if (!vigiaEmAndamento) {
+      vigiaEmAndamento = true
+      try {
+        await vigiarPedidosNovos()
+      } finally {
+        vigiaEmAndamento = false
+      }
+    }
+    agendarVigiaDePedidos()
+  }, ocioso ? INTERVALO_OCIOSO_MS : INTERVALO_ATIVO_MS)
+}
+
 // Espelha ehMarketplace() de src/types.ts — duplicado de propósito: o build do
 // electron-vite separa processo principal de renderer, e o projeto já mantém
 // utilitários puros assim duplicados entre os dois (ver orderFlow.ts).
@@ -765,7 +855,17 @@ async function vigiarPedidosNovos() {
   }
   primeiraVarreduraMain = false
 
+  // Empurra a lista pronta pro renderer — ele não busca mais sozinho. Antes o
+  // processo principal e o renderer chamavam /api/desktop/orders CADA UM por
+  // conta própria a cada 7s: o dobro de requisições por nada, já que os dois
+  // queriam exatamente a mesma coisa. Manda mesmo sem pedido novo — é o que
+  // mantém a cor de urgência do cartão e o estágio do entregador do iFood
+  // atualizados na tela.
+  mainWindow?.webContents.send('pedidos-atualizados', operacionais)
+
   if (novos.length === 0) return
+
+  ultimoPedidoNovoEm = Date.now()
 
   const cfg = loadConfig()
   const autoPrint = cfg.autoPrint !== 'false'
@@ -1123,9 +1223,9 @@ app.whenReady().then(() => {
   }
 
   // Vigia de pedidos novos no processo principal — imprime e notifica mesmo com
-  // a janela minimizada / na bandeja.
-  setTimeout(() => void vigiarPedidosNovos(), 2000)
-  setInterval(() => void vigiarPedidosNovos(), 7_000)
+  // a janela minimizada / na bandeja. Auto-agendado (ver agendarVigiaDePedidos):
+  // o ritmo varia sozinho conforme o movimento.
+  setTimeout(() => agendarVigiaDePedidos(), 2000)
 })
 
 app.on('before-quit', () => {

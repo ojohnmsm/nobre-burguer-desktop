@@ -25,6 +25,11 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('novo-pedido', listener)
     return () => ipcRenderer.removeListener('novo-pedido', listener)
   },
+  onOrdersUpdated: (cb: (orders: unknown[]) => void) => {
+    const listener = (_e: unknown, orders: unknown[]) => cb(orders)
+    ipcRenderer.on('pedidos-atualizados', listener)
+    return () => ipcRenderer.removeListener('pedidos-atualizados', listener)
+  },
   getStores:           ()                                          => ipcRenderer.invoke('get-stores'),
   addConnection:       (url: string, token: string)                 => ipcRenderer.invoke('add-connection', url, token),
   pairDevice:          (url: string, code: string)                  => ipcRenderer.invoke('pair-device', url, code),

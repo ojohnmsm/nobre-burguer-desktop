@@ -141,6 +141,8 @@ declare global {
       respondIfoodDispute: (disputeId: string, resposta: 'accept' | 'reject', motivo: string | null, connectionId?: string) => Promise<{ ok: boolean; error?: string }>
       onPrintError: (callback: (error: string) => void) => () => void
       onNewOrder: (callback: (info: { id: string; label: string; canal: string; customerName: string; isPickup: boolean }) => void) => () => void
+      /** Lista completa e pronta de pedidos, empurrada pelo processo principal — não é mais o renderer quem busca. */
+      onOrdersUpdated: (callback: (orders: Order[]) => void) => () => void
       getStores: () => Promise<{ id: string; storeName: string | null; online: boolean; ifoodConectado: boolean; ifoodPollingParadoSegundos: number | null }[]>
       addConnection: (url: string, token: string) => Promise<{ erro?: string }>
       /** Troca o código curto de pareamento pelo token longo e liga a loja. */
