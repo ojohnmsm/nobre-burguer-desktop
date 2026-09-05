@@ -3,7 +3,7 @@ import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs'
 import { randomUUID } from 'crypto'
-import { buildReceiptEscPos, buildReceiptHtml, printRawEscPos, ImpressaoAmbiguaError, prewarmHostImpressao, encerrarHostImpressao } from './escpos'
+import { buildReceiptEscPos, buildReceiptHtml, printRawEscPos, ImpressaoAmbiguaError, prewarmHostImpressao, encerrarHostImpressao, ultimoCaminhoDeImpressao } from './escpos'
 import { orderLabel, origemLabel } from './receiptFormat'
 import { pastaDoLog, registrar } from './log'
 
@@ -516,6 +516,52 @@ function normalizarVias(valor: string | undefined): string {
 }
 
 // ── Entry point: ESC/POS cru primeiro, HTML como reserva ────────────────
+// ── Diagnóstico de impressão (POST /api/desktop/diagnostico) ────────────────
+// Só o essencial pro painel avisar "esta instalação está no caminho lento ou
+// falhando" sem ninguém precisar perguntar por telefone. Falhas contam por
+// janela deslizante de 1h, em memória — reinicia com o app, e não precisa de
+// mais que isso: é saúde operacional, não auditoria.
+type CaminhoImpressaoReportado = 'escpos_host' | 'escpos_avulso' | 'html_fallback' | 'falhou'
+let ultimoCaminhoReportado: CaminhoImpressaoReportado | null = null
+let falhasImpressaoRecentes: number[] = []
+
+function registrarFalhaImpressao() {
+  falhasImpressaoRecentes.push(Date.now())
+}
+
+function falhasImpressaoNaUltimaHora(): number {
+  const umaHoraAtras = Date.now() - 3600_000
+  falhasImpressaoRecentes = falhasImpressaoRecentes.filter((ts) => ts > umaHoraAtras)
+  return falhasImpressaoRecentes.length
+}
+
+/**
+ * Manda o retrato de saúde da impressão pra cada loja ligada. Uma por
+ * conexão — o servidor guarda por APARELHO (chave), não por loja, porque duas
+ * instalações da mesma loja podem estar em situações diferentes (uma no host
+ * quente, outra caindo pro avulso). Nunca lança nem avisa a tela: diagnóstico
+ * que falha é só um relatório perdido, não um problema do balcão.
+ */
+async function reportarDiagnostico() {
+  const conexoes = getConnections()
+  await Promise.allSettled(
+    conexoes.map((conexao) =>
+      desktopRequest(
+        '/api/desktop/diagnostico',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            appVersion: app.getVersion(),
+            printPath: ultimoCaminhoReportado,
+            printFailures1h: falhasImpressaoNaUltimaHora(),
+          }),
+        },
+        conexao.id
+      ).catch((err) => registrar('erro', 'Falha ao reportar diagnóstico (não afeta a operação)', err))
+    )
+  )
+}
+
 async function autoPrintOrder(
   order: Record<string, unknown>,
   printerName: string,
@@ -527,12 +573,14 @@ async function autoPrintOrder(
   for (let i = 0; i < vias; i += 1) {
     try {
       await printRawEscPos(buildReceiptEscPos(order, widthCols), printerName)
+      ultimoCaminhoReportado = ultimoCaminhoDeImpressao() ?? ultimoCaminhoReportado
     } catch (escposError) {
       // Dúvida NÃO vira reimpressão. Era isto que dobrava a comanda: o ESC/POS
       // estourava o tempo-limite depois de já ter mandado os bytes, e a reserva
       // em HTML imprimia por cima.
       if (escposError instanceof ImpressaoAmbiguaError) {
         registrar('erro', `Impressão sem confirmação do pedido ${pedido}`, escposError)
+        registrarFalhaImpressao()
         // Aqui o lojista PRECISA agir: pode não ter saído papel nenhum.
         mainWindow?.webContents.send(
           'print-error',
@@ -548,10 +596,13 @@ async function autoPrintOrder(
       try {
         await chromiumPrint(order, printerName, widthCols)
         registrar('info', `Reserva em HTML imprimiu o pedido ${pedido}`)
+        ultimoCaminhoReportado = 'html_fallback'
       } catch (htmlError) {
         // Os DOIS caminhos falharam: não saiu comanda nenhuma. Agora sim é
         // problema do balcão, e a mensagem diz o que fazer, não o que houve.
         registrar('erro', `Reserva em HTML também falhou no pedido ${pedido}`, htmlError)
+        registrarFalhaImpressao()
+        ultimoCaminhoReportado = 'falhou'
         mainWindow?.webContents.send(
           'print-error',
           `A comanda do pedido ${pedido} não saiu. Use Imprimir no cartão do pedido.`
@@ -1319,6 +1370,11 @@ app.whenReady().then(() => {
   // a janela minimizada / na bandeja. Auto-agendado (ver agendarVigiaDePedidos):
   // o ritmo varia sozinho conforme o movimento.
   setTimeout(() => agendarVigiaDePedidos(), 2000)
+
+  // Diagnóstico: primeiro relatório com folga (depois da 1ª comanda provável),
+  // depois a cada 5min — não precisa de tempo real, é saúde operacional.
+  setTimeout(() => void reportarDiagnostico(), 30_000)
+  setInterval(() => void reportarDiagnostico(), 5 * 60 * 1000)
 })
 
 app.on('before-quit', () => {

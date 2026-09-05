@@ -645,6 +645,18 @@ function imprimirAvulso(buffer: Buffer, printerName: string): Promise<void> {
 }
 
 /**
+ * Qual dos dois caminhos de ESC/POS confirmou a última comanda — pro
+ * diagnóstico remoto (POST /api/desktop/diagnostico). `null` até a primeira
+ * impressão da sessão. Só isto, sem detalhe nenhum de pedido/loja: é
+ * telemetria operacional ("esta instalação está no caminho lento"), não log.
+ */
+let ultimoCaminhoEscpos: 'escpos_host' | 'escpos_avulso' | null = null
+
+export function ultimoCaminhoDeImpressao(): 'escpos_host' | 'escpos_avulso' | null {
+  return ultimoCaminhoEscpos
+}
+
+/**
  * Ponto de entrada único, igual para quem chama: tenta o host já quente
  * primeiro, cai no processo avulso só se o host não conseguiu nem subir.
  *
@@ -654,12 +666,14 @@ function imprimirAvulso(buffer: Buffer, printerName: string): Promise<void> {
  * caminho antigo é seguro.
  */
 export function printRawEscPos(buffer: Buffer, printerName: string): Promise<void> {
-  return imprimirComHost(buffer, printerName).catch((erro) => {
-    if (erro instanceof ImpressaoAmbiguaError) throw erro
-    if (erro instanceof HostIndisponivelError) {
-      registrar('erro', 'Host de impressão indisponível, usando o processo avulso desta vez', erro)
-      return imprimirAvulso(buffer, printerName)
-    }
-    throw erro
-  })
+  return imprimirComHost(buffer, printerName)
+    .then(() => { ultimoCaminhoEscpos = 'escpos_host' })
+    .catch((erro) => {
+      if (erro instanceof ImpressaoAmbiguaError) throw erro
+      if (erro instanceof HostIndisponivelError) {
+        registrar('erro', 'Host de impressão indisponível, usando o processo avulso desta vez', erro)
+        return imprimirAvulso(buffer, printerName).then(() => { ultimoCaminhoEscpos = 'escpos_avulso' })
+      }
+      throw erro
+    })
 }
