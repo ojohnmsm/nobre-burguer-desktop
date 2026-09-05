@@ -24,7 +24,7 @@ export interface OrderItem {
 }
 
 export type FulfillmentType = 'delivery' | 'pickup'
-export type OrderChannel = 'web' | 'whatsapp' | 'ifood'
+export type OrderChannel = 'web' | 'whatsapp' | 'ifood' | '99food'
 
 export interface Order {
   id: string
@@ -62,6 +62,9 @@ export interface Order {
   ifood_order_id: string | null
   /** Código que o entregador informa ao retirar o pedido na loja. */
   ifood_pickup_code: string | null
+  /** Número curto do 99Food (Open Delivery), o que o cliente informa. Nulo fora desse canal. */
+  opendelivery_display_id: string | null
+  opendelivery_order_id: string | null
   /** Vem no join da listagem — o número curto da loja, para montar "01012". */
   stores?: { store_number: number } | null
   /** Payload bruto do iFood — usado para o horário prometido (delivery.deliveryDateTime). */

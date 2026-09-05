@@ -5,8 +5,9 @@
  * duplicados entre web e desktop). Puro: sem acesso a banco, serve no renderer
  * e no processo principal do Electron.
  *
- * - Pedido do iFood: usa o número DELE (`ifood_display_id`) — é o que o cliente
- *   informa e o que aparece no app do lojista.
+ * - Pedido de marketplace (iFood, 99Food): usa o número DELE — é o que o
+ *   cliente informa e o que aparece no app do lojista. Nunca o nosso
+ *   sequencial (que nem é atribuído a estes pedidos).
  * - Pedido próprio: loja + sequencial, "01012" (dois dígitos de loja, três de
  *   pedido). Cresce acima de 999 em vez de reiniciar.
  * - Sem o número da loja no payload, mostra o sequencial sozinho.
@@ -18,6 +19,7 @@ export interface LabelableOrder {
   channel?: string | null
   order_number?: number | null
   ifood_display_id?: string | null
+  opendelivery_display_id?: string | null
   stores?: { store_number: number } | null
 }
 
@@ -28,6 +30,9 @@ export function formatOrderNumber(storeNumber: number, orderNumber: number): str
 export function orderLabel(order: LabelableOrder): string {
   if (order.channel === 'ifood') {
     return order.ifood_display_id ?? order.id.slice(0, 8).toUpperCase()
+  }
+  if (order.channel === '99food') {
+    return order.opendelivery_display_id ?? order.id.slice(0, 8).toUpperCase()
   }
 
   const storeNumber = order.stores?.store_number

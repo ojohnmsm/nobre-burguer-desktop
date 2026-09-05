@@ -1,25 +1,35 @@
 import { useEffect, useState } from 'react'
 import type { IfoodCancelReason } from '../electron-api'
 
+/** Nome do marketplace pra tela — só isto muda entre os dois canais. */
+function nomeMarketplace(channel: string): string {
+  return channel === '99food' ? '99Food' : 'iFood'
+}
+
 /**
- * Diálogo de cancelamento de pedido do iFood — espelho do componente do painel
- * web. O motivo tem que sair da lista que o próprio iFood devolve para AQUELE
- * pedido naquele momento (exigência da homologação); por isso a lista é buscada
- * ao abrir, toda vez, sem cache.
+ * Diálogo de cancelamento de pedido de marketplace (iFood, 99Food) — espelho
+ * do componente do painel web. O motivo tem que sair da lista aceita para
+ * AQUELE pedido (exigência da homologação): no iFood ela é buscada a cada
+ * abertura, sem cache, porque muda conforme o estado do pedido; no 99Food é
+ * fixa (enum da spec), mas o backend devolve as duas do mesmo jeito — o
+ * componente não precisa saber a diferença.
  */
 export function CancelIfoodDialog({
   orderId,
+  channel,
   connectionId,
   onClose,
   onRequested,
   notify,
 }: {
   orderId: string
+  channel: string
   connectionId?: string
   onClose: () => void
   onRequested: () => void
   notify: (message: string) => void
 }) {
+  const marketplace = nomeMarketplace(channel)
   const [reasons, setReasons] = useState<IfoodCancelReason[]>([])
   const [code, setCode] = useState('')
   const [loading, setLoading] = useState(true)
@@ -44,8 +54,8 @@ export function CancelIfoodDialog({
     setSending(true)
     const res = await window.api.requestIfoodCancel(orderId, reason.code, reason.description, connectionId)
     setSending(false)
-    if (!res.ok) { notify(res.error || 'O iFood recusou o cancelamento'); return }
-    notify('Cancelamento pedido ao iFood')
+    if (!res.ok) { notify(res.error || `O ${marketplace} recusou o cancelamento`); return }
+    notify(`Cancelamento pedido ao ${marketplace}`)
     onRequested()
     onClose()
   }
@@ -56,18 +66,18 @@ export function CancelIfoodDialog({
         className="bg-[var(--card)] border border-[var(--border)] rounded-xl w-full max-w-md p-4 space-y-3"
         onClick={e => e.stopPropagation()}
       >
-        <h3 className="font-bold text-sm">Cancelar pedido do iFood</h3>
+        <h3 className="font-bold text-sm">Cancelar pedido do {marketplace}</h3>
 
         {loading ? (
-          <p className="text-xs text-[var(--text-muted)]">Carregando motivos do iFood…</p>
+          <p className="text-xs text-[var(--text-muted)]">Carregando motivos do {marketplace}…</p>
         ) : reasons.length === 0 ? (
           <p className="text-xs text-[var(--text-muted)]">
-            O iFood não ofereceu nenhum motivo de cancelamento para este pedido agora.
+            O {marketplace} não ofereceu nenhum motivo de cancelamento para este pedido agora.
           </p>
         ) : (
           <>
             <label className="block text-xs text-[var(--text-muted)]">
-              Motivo (escolhido entre os que o iFood aceita para este pedido)
+              Motivo (escolhido entre os que o {marketplace} aceita para este pedido)
               <select
                 value={code}
                 onChange={e => setCode(e.target.value)}
@@ -79,7 +89,7 @@ export function CancelIfoodDialog({
               </select>
             </label>
             <p className="text-[10px] text-[var(--text-muted)]">
-              O iFood pode recusar ou abrir disputa. O pedido só sai do kanban quando ele confirmar.
+              O {marketplace} pode recusar ou abrir disputa. O pedido só sai do kanban quando ele confirmar.
             </p>
           </>
         )}

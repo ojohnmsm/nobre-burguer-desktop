@@ -7,7 +7,7 @@ import { CancelIfoodDialog } from './components/CancelIfoodDialog'
 import { StorePausePanel } from './components/StorePausePanel'
 import { DisputasPanel } from './components/DisputasPanel'
 import { CapivaraMark } from './components/CapivaraMark'
-import { KANBAN_COLUMNS, STATUS_LABELS, type Order, type OrderStatus } from './types'
+import { ehMarketplace, KANBAN_COLUMNS, STATUS_LABELS, type Order, type OrderStatus } from './types'
 import { rankStatus } from './orderFlow'
 import { compararFilaCozinha } from './orderTiming'
 import type { WhatsappStatusConversation } from './electron-api'
@@ -162,7 +162,10 @@ export default function App() {
     // só complementamos com o som configurável e o aviso dentro do app.
     const unsubscribeNovoPedido = window.api.onNewOrder(info => {
       playOrderAlert()
-      const origem = info.canal === 'ifood' ? 'iFood — ' : info.canal === 'whatsapp' ? 'WhatsApp — ' : ''
+      const origem = info.canal === 'ifood' ? 'iFood — '
+        : info.canal === '99food' ? '99Food — '
+        : info.canal === 'whatsapp' ? 'WhatsApp — '
+        : ''
       const retirada = info.isPickup ? 'RETIRADA — ' : ''
       addNotification(`🔔 ${retirada}${origem}Novo pedido #${info.label} — ${info.customerName}`)
       void loadOrders()
@@ -293,12 +296,13 @@ export default function App() {
     // um pedido da segunda loja iria para o servidor da primeira — que
     // responderia "não encontrado", ou acertaria outro pedido por acaso.
     const alvo = orders.find(o => o.id === id)
-    const isIfood = alvo?.channel === 'ifood'
+    const doMarketplace = alvo ? ehMarketplace(alvo.channel) : false
     const anterior = alvo?.status
 
-    // Resposta visual IMEDIATA para pedido do iFood: move o card já e verifica
-    // com o iFood em segundo plano. Se recusar/falhar, volta.
-    if (isIfood) {
+    // Resposta visual IMEDIATA para pedido de marketplace (iFood, 99Food): move
+    // o card já e verifica com o marketplace em segundo plano. Se recusar ou
+    // falhar, volta.
+    if (doMarketplace) {
       optimisticRef.current.set(id, { status, ts: Date.now() })
       setOrders(previous => previous.map(order => order.id === id ? { ...order, status } : order))
     }
@@ -306,7 +310,7 @@ export default function App() {
     const res = await window.api.updateOrderStatus(id, status, alvo?.connectionId)
 
     if (!res.ok) {
-      if (isIfood && anterior) {
+      if (doMarketplace && anterior) {
         optimisticRef.current.delete(id)
         setOrders(previous => previous.map(order => order.id === id ? { ...order, status: anterior } : order))
       }
@@ -314,10 +318,11 @@ export default function App() {
       return
     }
     if (res.requested) {
-      // iFood aceitou processar. O card já está na posição nova; o evento real
-      // confirma no próximo polling e o merge de loadOrders segura a posição
-      // até lá (ou reverte no timeout de 90s).
-      addNotification(res.message || 'Enviado ao iFood')
+      // O marketplace aceitou processar. O card já está na posição nova; o
+      // evento real confirma no próximo polling e o merge de loadOrders segura
+      // a posição até lá (ou reverte no timeout de 90s). A mensagem já vem do
+      // servidor nomeando o marketplace certo (ver applyOrderStatusChange).
+      addNotification(res.message || 'Enviado ao marketplace')
       return
     }
     optimisticRef.current.delete(id)
@@ -669,6 +674,7 @@ export default function App() {
       {cancelandoIfood && (
         <CancelIfoodDialog
           orderId={cancelandoIfood.id}
+          channel={cancelandoIfood.channel}
           connectionId={cancelandoIfood.connectionId}
           onClose={() => setCancelandoIfood(null)}
           onRequested={() => void loadOrders()}

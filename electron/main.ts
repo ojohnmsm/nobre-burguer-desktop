@@ -614,6 +614,12 @@ ipcMain.handle('print-order', async (_e, order: Record<string, unknown>) => {
   }
 })
 
+interface BuscaResultado {
+  pedidos: Record<string, unknown>[]
+  /** Ids das conexões que responderam NESTE ciclo — ver vigiarPedidosNovos(). */
+  conexoesOk: Set<string>
+}
+
 /**
  * Busca em TODAS as lojas ligadas e junta o resultado.
  *
@@ -623,9 +629,12 @@ ipcMain.handle('print-order', async (_e, order: Record<string, unknown>) => {
  * outro pedido com o mesmo id.
  *
  * `allSettled` e não `all`: uma loja fora do ar não pode esconder os pedidos da
- * outra. A cozinha continua trabalhando com o que dá para ver.
+ * outra. A cozinha continua trabalhando com o que dá para ver. `conexoesOk`
+ * diz QUAIS responderam desta vez — o vigia de pedidos novos precisa disso
+ * para não tratar uma loja que só piscou offline como se tivesse perdido todo
+ * o histórico dela (ver o comentário em pedidosVistosMain).
  */
-async function buscarEmTodasAsLojas(caminho: string): Promise<unknown[]> {
+async function buscarComStatusPorConexao(caminho: string): Promise<BuscaResultado> {
   const conexoes = getConnections()
   if (conexoes.length === 0) throw new Error('Configure a URL e o código da loja')
 
@@ -645,9 +654,14 @@ async function buscarEmTodasAsLojas(caminho: string): Promise<unknown[]> {
   )
 
   const juntos: Record<string, unknown>[] = []
+  const conexoesOk = new Set<string>()
   resultados.forEach((r, i) => {
-    if (r.status === 'fulfilled') juntos.push(...(r.value as Record<string, unknown>[]))
-    else console.error(`Loja ${conexoes[i].label || conexoes[i].id} indisponível:`, r.reason)
+    if (r.status === 'fulfilled') {
+      juntos.push(...(r.value as Record<string, unknown>[]))
+      conexoesOk.add(conexoes[i].id)
+    } else {
+      console.error(`Loja ${conexoes[i].label || conexoes[i].id} indisponível:`, r.reason)
+    }
   })
 
   // DEDUPE POR ID DO PEDIDO.
@@ -680,11 +694,18 @@ async function buscarEmTodasAsLojas(caminho: string): Promise<unknown[]> {
 
   // Ordena por chegada, misturando as lojas. Quem está no balcão reage ao
   // pedido que chegou, não à loja de onde ele veio.
-  return unicos.sort((a, b) => {
+  const pedidosOrdenados = unicos.sort((a, b) => {
     const da = String(a.created_at ?? '')
     const db = String(b.created_at ?? '')
     return db.localeCompare(da)
   })
+
+  return { pedidos: pedidosOrdenados, conexoesOk }
+}
+
+/** Só a lista, para quem não precisa saber quais conexões responderam. */
+async function buscarEmTodasAsLojas(caminho: string): Promise<unknown[]> {
+  return (await buscarComStatusPorConexao(caminho)).pedidos
 }
 
 ipcMain.handle('fetch-orders', async () => {
@@ -696,31 +717,52 @@ ipcMain.handle('fetch-orders', async () => {
 // timer do renderer nesse estado. O processo principal nunca dorme — é ELE que
 // garante a impressão da comanda e a notificação de pedido novo. O renderer só
 // toca o som e mostra o toast, avisado por IPC.
-const pedidosVistosMain = new Set<string>()
+//
+// Os vistos são por CONEXÃO, não um Set único: `Promise.allSettled` já aceita
+// que uma loja fique fora do ar sem derrubar as outras, mas um Set único
+// apagava TUDO a cada ciclo (`.clear()`) — inclusive o que já sabíamos da loja
+// que só piscou. Quando ela voltava, todo pedido dela na janela de 24h virava
+// "novo" de novo: reimpressão e som em dobro por uma queda de rede de segundos.
+const pedidosVistosMain = new Map<string, Set<string>>()
 let primeiraVarreduraMain = true
 const NOVO_PEDIDO_RECENTE_MS = 20 * 60 * 1000
 
+// Espelha ehMarketplace() de src/types.ts — duplicado de propósito: o build do
+// electron-vite separa processo principal de renderer, e o projeto já mantém
+// utilitários puros assim duplicados entre os dois (ver orderFlow.ts).
+function ehMarketplace(channel: string): boolean {
+  return channel === 'ifood' || channel === '99food'
+}
+
 function deveImprimirCanal(channel: string, filtro: string): boolean {
-  if (filtro === 'ifood') return channel === 'ifood'
-  if (filtro === 'own') return channel !== 'ifood'
+  if (filtro === 'ifood') return ehMarketplace(channel)
+  if (filtro === 'own') return !ehMarketplace(channel)
   return true
 }
 
 async function vigiarPedidosNovos() {
-  let pedidos: Record<string, unknown>[]
+  let resultado: BuscaResultado
   try {
-    pedidos = (await buscarEmTodasAsLojas('/api/desktop/orders')) as Record<string, unknown>[]
+    resultado = await buscarComStatusPorConexao('/api/desktop/orders')
   } catch {
     return // rede/servidor fora — tenta no próximo ciclo, sem consumir a 1ª varredura
   }
+  const pedidos = resultado.pedidos
 
   const operacionais = pedidos.filter((p) => p.status !== 'awaiting_payment')
   const novos = primeiraVarreduraMain
     ? []
-    : operacionais.filter((p) => !pedidosVistosMain.has(p.id as string))
+    : operacionais.filter((p) => {
+        const vistosDaConexao = pedidosVistosMain.get(String(p.connectionId ?? ''))
+        return !vistosDaConexao?.has(p.id as string)
+      })
 
-  pedidosVistosMain.clear()
-  for (const p of operacionais) pedidosVistosMain.add(p.id as string)
+  // Só reconstrói o "visto" das conexões que responderam AGORA — a de quem
+  // ficou fora do ar neste ciclo mantém o que já sabíamos dela.
+  for (const connId of resultado.conexoesOk) pedidosVistosMain.set(connId, new Set())
+  for (const p of operacionais) {
+    pedidosVistosMain.get(String(p.connectionId ?? ''))?.add(p.id as string)
+  }
   primeiraVarreduraMain = false
 
   if (novos.length === 0) return
@@ -736,7 +778,10 @@ async function vigiarPedidosNovos() {
     if (Date.now() - new Date(p.created_at as string).getTime() > NOVO_PEDIDO_RECENTE_MS) continue
 
     const canal = String(p.channel ?? 'web')
-    const origem = canal === 'ifood' ? ' iFood' : canal === 'whatsapp' ? ' WhatsApp' : ''
+    const origem = canal === 'ifood' ? ' iFood'
+      : canal === '99food' ? ' 99Food'
+      : canal === 'whatsapp' ? ' WhatsApp'
+      : ''
     const isPickup = p.fulfillment_type === 'pickup'
 
     // Notificação nativa do SO — só quando a janela NÃO está em foco (minimizada,

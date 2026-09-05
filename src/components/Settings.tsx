@@ -341,10 +341,10 @@ export function Settings({ onSaved }: Props) {
             >
               <option value="all">Todos os pedidos</option>
               <option value="own">Só do site / WhatsApp</option>
-              <option value="ifood">Só do iFood</option>
+              <option value="ifood">Só de marketplace (iFood / 99Food)</option>
             </select>
             <p className="text-[11px] text-[var(--text-xmuted)] mt-1">
-              Use &quot;Só do site / WhatsApp&quot; se o Gestor de Pedidos do iFood já imprime as comandas dele.
+              Use &quot;Só do site / WhatsApp&quot; se o app do marketplace (iFood, 99Food) já imprime as comandas dele.
             </p>
           </div>
         )}

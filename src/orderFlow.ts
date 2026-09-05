@@ -1,4 +1,4 @@
-import type { OrderStatus } from './types'
+import { ehMarketplace, type OrderStatus } from './types'
 
 /**
  * O fluxo do pedido na cozinha, num lugar só — cópia de `lib/order-flow.ts` do
@@ -15,11 +15,12 @@ export interface FlowOrder {
 }
 
 /**
- * Status para os quais existe uma ação da LOJA no iFood (confirm, readyToPickup,
- * dispatch). `delivered`/`cancelled` num pedido do iFood chegam por evento, não
- * por botão — então o fluxo pra frente para em `out_for_delivery` no iFood.
+ * Status para os quais existe uma ação da LOJA num pedido de marketplace
+ * (confirm, readyToPickup, dispatch — iFood e 99Food/Open Delivery).
+ * `delivered`/`cancelled` chegam por evento, não por botão — então o fluxo pra
+ * frente para em `out_for_delivery` para qualquer marketplace.
  */
-const IFOOD_ACIONAVEL: ReadonlySet<OrderStatus> = new Set<OrderStatus>([
+const MARKETPLACE_ACIONAVEL: ReadonlySet<OrderStatus> = new Set<OrderStatus>([
   'preparing',
   'ready_to_pickup',
   'out_for_delivery',
@@ -31,7 +32,7 @@ export interface ProximaEtapa {
 }
 
 export function proximaEtapa(order: FlowOrder): ProximaEtapa | null {
-  const isIfood = order.channel === 'ifood'
+  const doMarketplace = ehMarketplace(order.channel)
   const isRetirada = order.fulfillment_type === 'pickup'
 
   let proxima: ProximaEtapa | null
@@ -57,7 +58,7 @@ export function proximaEtapa(order: FlowOrder): ProximaEtapa | null {
   }
 
   if (!proxima) return null
-  if (isIfood && !IFOOD_ACIONAVEL.has(proxima.status)) return null
+  if (doMarketplace && !MARKETPLACE_ACIONAVEL.has(proxima.status)) return null
   return proxima
 }
 
@@ -80,7 +81,7 @@ export function rankStatus(status: OrderStatus): number {
   }
 }
 
-export type OrigemTom = 'ifood' | 'whatsapp' | 'web'
+export type OrigemTom = 'ifood' | '99food' | 'whatsapp' | 'web'
 
 export interface Origem {
   label: string
@@ -89,6 +90,7 @@ export interface Origem {
 
 export function origemDoPedido(channel: string | null | undefined): Origem {
   if (channel === 'ifood') return { label: 'iFood', tom: 'ifood' }
+  if (channel === '99food') return { label: '99Food', tom: '99food' }
   if (channel === 'whatsapp') return { label: 'WhatsApp', tom: 'whatsapp' }
   return { label: 'Site', tom: 'web' }
 }

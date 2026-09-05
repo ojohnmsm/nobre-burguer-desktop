@@ -62,7 +62,9 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
     : isOld ? 'text-[var(--danger)]' : 'text-[var(--text-muted)]'
 
   function handleCancel() {
-    if (isIfood) { onCancelIfood?.(order); return }
+    // Todo marketplace (iFood, 99Food) cancela com motivo, pela mesma tela —
+    // não é escolha nossa, é o que o servidor aceita (ver applyOrderStatusChange).
+    if (doMarketplace) { onCancelIfood?.(order); return }
     if (window.confirm('Cancelar este pedido?')) onStatus(order.id, 'cancelled')
   }
 
@@ -102,6 +104,7 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
             </span>
             <span className={`text-[10px] px-1.5 py-0.5 rounded-sm font-bold tracking-wide border ${
               origem.tom === 'ifood' ? 'border-red-500/50 text-red-600'
+              : origem.tom === '99food' ? 'border-amber-500/50 text-amber-700'
               : origem.tom === 'whatsapp' ? 'border-green-500/50 text-green-700'
               : 'border-[var(--border)] text-[var(--text-muted)]'
             }`}>

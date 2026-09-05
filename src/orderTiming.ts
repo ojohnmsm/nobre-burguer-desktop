@@ -1,9 +1,15 @@
+import { ehMarketplace } from './types'
+
 /**
  * Tempo de preparo do pedido — cópia de `lib/order-timing.ts` do app web (o
  * projeto duplica utilitário puro entre web e desktop).
  *
  * iFood: alvo = `external_payload.delivery.deliveryDateTime` (o iFood define).
  * Pedido próprio: `created_at + prepTargetMinutes` (0 = sem contagem).
+ * 99Food: sem alvo aqui — o payload do Open Delivery não foi mapeado para um
+ * horário prometido equivalente; melhor ficar sem contagem (cartão neutro, o
+ * mesmo caminho de "iFood sem data no payload") do que aplicar por engano o
+ * prepTargetMinutes da loja a um pedido cujo prazo é o marketplace que define.
  * Terminal: congela; devolve o tempo total.
  */
 
@@ -56,7 +62,7 @@ export function preparoInfo(
   let alvoISO: string | null = null
   if (order.channel === 'ifood') {
     alvoISO = ifoodDeliveryDateTime(order.external_payload)
-  } else if (prepTargetMinutes > 0) {
+  } else if (!ehMarketplace(order.channel) && prepTargetMinutes > 0) {
     alvoISO = new Date(new Date(order.created_at).getTime() + prepTargetMinutes * 60000).toISOString()
   }
 
@@ -98,10 +104,11 @@ interface UrgenciaOrder extends TimingOrder {
 export function nivelUrgencia(order: UrgenciaOrder, agora: number = Date.now()): NivelUrgencia | null {
   if (order.status === 'delivered' || order.status === 'cancelled') return null
   if (order.status === 'out_for_delivery') return null
-  // Pedido do iFood: quando a cozinha marca "pronto", o resto é com o iFood
-  // (o motoboy). Não faz sentido pintar de vermelho o que a cozinha já
-  // terminou e não controla — a urgência de preparo para aqui.
-  if (order.channel === 'ifood' && order.status === 'ready_to_pickup') return null
+  // Pedido de marketplace: quando a cozinha marca "pronto", o resto é com o
+  // marketplace (o motoboy dele, ou o do iFood). Não faz sentido pintar de
+  // vermelho o que a cozinha já terminou e não controla — a urgência de
+  // preparo para aqui.
+  if (ehMarketplace(order.channel) && order.status === 'ready_to_pickup') return null
 
   const criadoMs = new Date(order.created_at).getTime()
   let alvoMs: number | null = null
@@ -109,7 +116,7 @@ export function nivelUrgencia(order: UrgenciaOrder, agora: number = Date.now()):
   if (order.channel === 'ifood') {
     const iso = ifoodDeliveryDateTime(order.external_payload)
     alvoMs = iso ? new Date(iso).getTime() : null
-  } else {
+  } else if (!ehMarketplace(order.channel)) {
     const confirmar = Math.max(0, order.confirm_target_minutes ?? 0)
     const preparar = Math.max(0, order.prep_target_minutes ?? 0)
     const aguardar = Math.max(0, order.ready_target_minutes ?? 0)
