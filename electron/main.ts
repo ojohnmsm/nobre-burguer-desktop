@@ -3,7 +3,7 @@ import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs'
 import { randomUUID } from 'crypto'
-import { buildReceiptEscPos, buildReceiptHtml, printRawEscPos, ImpressaoAmbiguaError } from './escpos'
+import { buildReceiptEscPos, buildReceiptHtml, printRawEscPos, ImpressaoAmbiguaError, prewarmHostImpressao, encerrarHostImpressao } from './escpos'
 import { orderLabel, origemLabel } from './receiptFormat'
 import { pastaDoLog, registrar } from './log'
 
@@ -1054,6 +1054,10 @@ app.whenReady().then(() => {
   // saber qual versao rodava nem onde uma execucao termina e outra comeca.
   registrar('info', `Cardapia ${app.getVersion()} iniciou`)
 
+  // Sobe o host de impressão cedo — a primeira comanda do dia não deveria
+  // pagar o custo de compilar a classe RawPrinter (ver escpos.ts).
+  prewarmHostImpressao()
+
   Menu.setApplicationMenu(null)
 
   mainWindow = new BrowserWindow({
@@ -1124,7 +1128,10 @@ app.whenReady().then(() => {
   setInterval(() => void vigiarPedidosNovos(), 7_000)
 })
 
-app.on('before-quit', () => { isQuitting = true })
+app.on('before-quit', () => {
+  isQuitting = true
+  encerrarHostImpressao()
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

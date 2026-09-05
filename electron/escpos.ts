@@ -1,9 +1,10 @@
 import { app } from 'electron'
 import { writeFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
-import { execFile } from 'child_process'
+import { execFile, spawn } from 'child_process'
 import { randomUUID } from 'crypto'
 import { orderLabel, origemLabel } from './receiptFormat'
+import { registrar } from './log'
 
 /**
  * Impressão térmica por ESC/POS cru, direto no spooler do Windows.
@@ -300,12 +301,11 @@ export function buildReceiptHtml(order: Record<string, unknown>, widthCols: 32 |
 }
 
 // ── Envio RAW ao spooler ────────────────────────────────────────────────────
-// Escreve o buffer num .bin e chama um script PowerShell que faz P/Invoke em
-// winspool.drv. `datatype = "RAW"` é o que pula a renderização GDI do driver.
-const PS_RAW_PRINT = `
-param([string]$BinPath, [string]$Printer)
-$bytes = [System.IO.File]::ReadAllBytes($BinPath)
-$code = @"
+// A classe RawPrinter (P/Invoke em winspool.drv, datatype "RAW" — o que pula a
+// renderização GDI do driver) é a mesma nos dois caminhos abaixo. O que muda é
+// QUANDO ela é compilada.
+
+const RAWPRINTER_CSHARP = `
 using System;
 using System.Runtime.InteropServices;
 public class RawPrinter {
@@ -333,23 +333,17 @@ public class RawPrinter {
     } finally { ClosePrinter(h); }
   }
 }
-"@
-Add-Type -TypeDefinition $code -Language CSharp
-[RawPrinter]::Send($Printer, $bytes)
-Write-Output "CARDAPIA_OK"
 `.trim()
 
-/** O script confirma o envio escrevendo isto DEPOIS que Send retorna. */
+/** O trabalho confirma o envio escrevendo isto DEPOIS que Send retorna. */
 const SENTINELA = 'CARDAPIA_OK'
 
 /**
  * A impressão pode ter saído — e pode não ter. Não dá para tentar de novo.
  *
  * Existe porque a reserva em HTML transformava esta dúvida em DUAS comandas: o
- * `Add-Type` recompila o C# a cada impressão, e num PC de cozinha lento isso
- * mais o custo de abrir o PowerShell passava do tempo-limite. O `execFile`
- * matava o processo e reportava erro DEPOIS de os bytes já terem ido para o
- * spooler; o `catch` de quem chama caía no Chromium e imprimia por cima.
+ * `catch` de quem chama caía no Chromium e imprimia por cima de um cupom que
+ * talvez já tivesse saído.
  *
  * Quem recebe este erro não deve reimprimir sozinho — deve AVISAR. Uma comanda
  * a menos a pessoa vê no quadro e reimprime pelo cartão; uma a mais é papel
@@ -362,13 +356,254 @@ export class ImpressaoAmbiguaError extends Error {
   }
 }
 
-export function printRawEscPos(buffer: Buffer, printerName: string): Promise<void> {
+/** O host não subiu (ou morreu) — nem chegou a tentar imprimir nada. */
+class HostIndisponivelError extends Error {}
+
+// ── Host persistente de PowerShell ──────────────────────────────────────────
+//
+// POR QUE EXISTIR: o caminho de UM TIRO (mantido abaixo como `imprimirAvulso`,
+// reserva para quando este host não sobe) abre um `powershell.exe` novo e manda
+// `Add-Type` recompilar RawPrinter A CADA COMANDA. Esse compile + o custo de
+// abrir o processo era a fatia lenta e variável de toda impressão — a razão do
+// tempo-limite de 45s e da classe de erro acima.
+//
+// Aqui sobe UM processo, uma vez (`prewarmHostImpressao`, chamado no
+// app.whenReady), com a classe já carregada; cada comanda depois vira só um
+// ReadAllBytes + Send mandado por STDIN a um processo já quente — medido
+// localmente em ~15-35ms depois do host pronto, contra os 2-4s do caminho de
+// um tiro. A primeira impressão do dia paga o Add-Type (é o próprio prewarm,
+// ~1,7s medido); as seguintes não.
+//
+// O CONTRATO DE printRawEscPos() NÃO MUDA: resolve quando a sentinela do
+// TRABALHO confirma, rejeita com ImpressaoAmbiguaError quando o trabalho
+// estourou o tempo. Matar o host é a única forma de "cancelar" um comando
+// PowerShell em curso — não dá para saber se os bytes já chegaram ao spooler,
+// então a dúvida de sempre se aplica, e o host sobe de novo sozinho no próximo
+// pedido (ver garantirHost).
+type HostProcesso = ReturnType<typeof spawn>
+
+let host: HostProcesso | null = null
+let hostPronto: Promise<void> | null = null
+let bufferSaida = ''
+let filaHost: Promise<unknown> = Promise.resolve()
+
+const HOST_PRONTO = 'CARDAPIA_HOST_PRONTO'
+const HOST_ERRO_PREFIXO = 'CARDAPIA_HOST_ERRO:'
+const JOB_OK_RE = /^CARDAPIA_JOB_([0-9a-f-]+)_OK$/
+const JOB_ERRO_RE = /^CARDAPIA_JOB_([0-9a-f-]+)_ERRO:(.*)$/
+
+const jobsPendentes = new Map<string, { resolve: () => void; reject: (erro: Error) => void }>()
+
+/** Aspas simples dobradas — o jeito do PowerShell escapar dentro de string com aspas simples. */
+function escaparPs(valor: string): string {
+  return valor.replace(/'/g, "''")
+}
+
+const HOST_SCRIPT_INICIAL = `
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try {
+$code = @"
+${RAWPRINTER_CSHARP}
+"@
+Add-Type -TypeDefinition $code -Language CSharp -ErrorAction Stop
+Write-Output "${HOST_PRONTO}"
+} catch {
+Write-Output "${HOST_ERRO_PREFIXO}$($_.Exception.Message)"
+}
+`
+
+/** Derruba o host atual (se houver) e rejeita quem ainda esperava resposta dele. */
+function derrubarHost(motivo: string) {
+  const processoAtual = host
+  host = null
+  hostPronto = null
+  bufferSaida = ''
+  if (processoAtual) {
+    try { processoAtual.kill() } catch { /* ignore */ }
+  }
+  for (const job of jobsPendentes.values()) job.reject(new Error(motivo))
+  jobsPendentes.clear()
+}
+
+function processarLinhaDeTrabalho(linha: string) {
+  const ok = linha.match(JOB_OK_RE)
+  if (ok) {
+    jobsPendentes.get(ok[1])?.resolve()
+    jobsPendentes.delete(ok[1])
+    return
+  }
+  const erro = linha.match(JOB_ERRO_RE)
+  if (erro) {
+    jobsPendentes.get(erro[1])?.reject(new Error(erro[2] || 'Impressão recusada'))
+    jobsPendentes.delete(erro[1])
+  }
+  // Qualquer outra linha (eco, aviso do PowerShell) é ignorada de propósito —
+  // só as sentinelas têm significado aqui.
+}
+
+/** Sobe o host se preciso, e resolve quando a classe já está carregada. */
+function garantirHost(): Promise<HostProcesso> {
+  if (host && hostPronto) {
+    const processoAtual = host
+    return hostPronto.then(() => processoAtual)
+  }
+
+  const processo = spawn(
+    'powershell',
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', '-'],
+    { windowsHide: true }
+  )
+  host = processo
+
+  hostPronto = new Promise<void>((resolve, reject) => {
+    // 45s: o mesmo custo de sempre — só que agora pago UMA vez por vida do
+    // host, não a cada comanda.
+    const tempoLimite = setTimeout(() => {
+      const erro = new HostIndisponivelError('Tempo esgotado ao iniciar o host de impressão')
+      derrubarHost(erro.message)
+      reject(erro)
+    }, 45000)
+
+    processo.stdout?.on('data', (chunk: Buffer) => {
+      bufferSaida += chunk.toString('utf-8')
+      let idx: number
+      while ((idx = bufferSaida.indexOf('\n')) >= 0) {
+        const linha = bufferSaida.slice(0, idx).trim()
+        bufferSaida = bufferSaida.slice(idx + 1)
+        if (!linha) continue
+
+        if (linha === HOST_PRONTO) {
+          clearTimeout(tempoLimite)
+          resolve()
+          continue
+        }
+        if (linha.startsWith(HOST_ERRO_PREFIXO)) {
+          clearTimeout(tempoLimite)
+          const erro = new HostIndisponivelError(linha.slice(HOST_ERRO_PREFIXO.length))
+          derrubarHost(erro.message)
+          reject(erro)
+          continue
+        }
+        processarLinhaDeTrabalho(linha)
+      }
+    })
+
+    processo.stderr?.on('data', (chunk: Buffer) => {
+      registrar('erro', 'Host de impressão (stderr)', chunk.toString('utf-8').trim())
+    })
+
+    processo.on('error', (err) => {
+      clearTimeout(tempoLimite)
+      const erro = new HostIndisponivelError(err.message)
+      derrubarHost(erro.message)
+      reject(erro)
+    })
+
+    processo.on('exit', (code) => {
+      clearTimeout(tempoLimite)
+      // Só derruba o estado se ESTE processo ainda for o host atual — evita
+      // que a saída de um host já substituído apague o novo.
+      if (host === processo) derrubarHost(`Host de impressão encerrou (código ${code})`)
+    })
+
+    processo.stdin?.write(HOST_SCRIPT_INICIAL + '\n')
+  })
+
+  return hostPronto.then(() => processo)
+}
+
+/** Sobe o host cedo (chamado no app.whenReady) — a primeira comanda do dia não paga o Add-Type. */
+export function prewarmHostImpressao(): void {
+  garantirHost().catch((erro) => {
+    registrar(
+      'erro',
+      'Não foi possível pré-aquecer o host de impressão — a primeira comanda vai usar o processo avulso',
+      erro
+    )
+  })
+}
+
+/** Encerra o host, se houver. Chamado no encerramento do app. */
+export function encerrarHostImpressao(): void {
+  if (host) derrubarHost('App encerrando')
+}
+
+/** Um trabalho no host já quente: ReadAllBytes(caminho) + Send(impressora, bytes). */
+function executarJobNoHost(processo: HostProcesso, binPath: string, printerName: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const jobId = randomUUID()
+
+    // 15s: só o WritePrinter em si, com a classe já carregada — bem menos que
+    // o custo de compilar, mas ainda folgado para spooler ou USB lento.
+    const tempoLimite = setTimeout(() => {
+      jobsPendentes.delete(jobId)
+      derrubarHost('Trabalho de impressão sem resposta')
+      reject(new ImpressaoAmbiguaError('o host de impressão demorou demais para responder'))
+    }, 15000)
+
+    jobsPendentes.set(jobId, {
+      resolve: () => { clearTimeout(tempoLimite); resolve() },
+      reject: (erro) => { clearTimeout(tempoLimite); reject(erro) },
+    })
+
+    const script = `
+try {
+  $bytes = [System.IO.File]::ReadAllBytes('${escaparPs(binPath)}')
+  [RawPrinter]::Send('${escaparPs(printerName)}', $bytes)
+  Write-Output "CARDAPIA_JOB_${jobId}_OK"
+} catch {
+  Write-Output "CARDAPIA_JOB_${jobId}_ERRO:$($_.Exception.Message)"
+}
+`
+    processo.stdin?.write(script + '\n', (err) => {
+      if (err) {
+        clearTimeout(tempoLimite)
+        jobsPendentes.delete(jobId)
+        reject(err)
+      }
+    })
+  })
+}
+
+async function imprimirComHost(buffer: Buffer, printerName: string): Promise<void> {
+  const processo = await garantirHost() // pode rejeitar com HostIndisponivelError
+
+  const tmpBin = join(app.getPath('temp'), `cardapia-escpos-${randomUUID()}.bin`)
+  writeFileSync(tmpBin, buffer)
+
+  // Fila simples: nunca dois trabalhos escrevendo no mesmo stdin ao mesmo
+  // tempo — a mesma ordem que um humano digitando dois comandos teria, um de
+  // cada vez. Uma rejeição não trava a fila para o próximo pedido.
+  const executar = () => executarJobNoHost(processo, tmpBin, printerName)
+  const tarefa = filaHost.then(executar, executar)
+  filaHost = tarefa.then(() => {}, () => {})
+
+  try {
+    await tarefa
+  } finally {
+    try { unlinkSync(tmpBin) } catch { /* ignore */ }
+  }
+}
+
+// ── Reserva: processo avulso, do zero (só quando o host não sobe) ───────────
+const PS_RAW_PRINT_AVULSO = `
+param([string]$BinPath, [string]$Printer)
+$bytes = [System.IO.File]::ReadAllBytes($BinPath)
+$code = @"
+${RAWPRINTER_CSHARP}
+"@
+Add-Type -TypeDefinition $code -Language CSharp
+[RawPrinter]::Send($Printer, $bytes)
+Write-Output "${SENTINELA}"
+`.trim()
+
+function imprimirAvulso(buffer: Buffer, printerName: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const tmpBin = join(app.getPath('temp'), `cardapia-escpos-${randomUUID()}.bin`)
     const tmpPs = join(app.getPath('temp'), `cardapia-rawprint-${randomUUID()}.ps1`)
     try {
       writeFileSync(tmpBin, buffer)
-      writeFileSync(tmpPs, PS_RAW_PRINT, 'utf-8')
+      writeFileSync(tmpPs, PS_RAW_PRINT_AVULSO, 'utf-8')
     } catch (err) {
       reject(err)
       return
@@ -377,8 +612,9 @@ export function printRawEscPos(buffer: Buffer, printerName: string): Promise<voi
     execFile(
       'powershell',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmpPs, '-BinPath', tmpBin, '-Printer', printerName],
-      // 45s e não 20s: o Add-Type compila C# a cada chamada, e numa máquina
-      // fraca a primeira impressão do dia é bem mais lenta que as seguintes.
+      // 45s: o Add-Type compila C# nesta chamada (é a reserva, não o caminho
+      // quente), e numa máquina fraca isso é a fatia mais lenta de toda a
+      // impressão.
       { timeout: 45000, windowsHide: true },
       (err, stdout) => {
         try { unlinkSync(tmpBin) } catch { /* ignore */ }
@@ -405,5 +641,25 @@ export function printRawEscPos(buffer: Buffer, printerName: string): Promise<voi
         reject(err ?? new Error('ESC/POS terminou sem confirmar o envio'))
       }
     )
+  })
+}
+
+/**
+ * Ponto de entrada único, igual para quem chama: tenta o host já quente
+ * primeiro, cai no processo avulso só se o host não conseguiu nem subir.
+ *
+ * Erro AMBÍGUO nunca cai no avulso dentro da mesma chamada — é exatamente o
+ * que ImpressaoAmbiguaError existe para impedir (ver a classe acima). Um erro
+ * de host indisponível, sim: ali nada foi tentado ainda, então tentar pelo
+ * caminho antigo é seguro.
+ */
+export function printRawEscPos(buffer: Buffer, printerName: string): Promise<void> {
+  return imprimirComHost(buffer, printerName).catch((erro) => {
+    if (erro instanceof ImpressaoAmbiguaError) throw erro
+    if (erro instanceof HostIndisponivelError) {
+      registrar('erro', 'Host de impressão indisponível, usando o processo avulso desta vez', erro)
+      return imprimirAvulso(buffer, printerName)
+    }
+    throw erro
   })
 }
