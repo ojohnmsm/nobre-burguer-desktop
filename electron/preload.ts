@@ -17,8 +17,12 @@ contextBridge.exposeInMainWorld('api', {
   respondIfoodDispute: (disputeId: string, resposta: 'accept' | 'reject', motivo: string | null, connectionId?: string) =>
     ipcRenderer.invoke('respond-ifood-dispute', disputeId, resposta, motivo, connectionId),
   onPrintError:      (cb: (err: string) => void) => {
-    ipcRenderer.on('print-error', (_e, err) => cb(err))
-    return () => ipcRenderer.removeAllListeners('print-error')
+    // removeListener com a referência, não removeAllListeners — aquele
+    // apagaria também um segundo assinante deste canal que viesse a existir,
+    // não só este. Mesmo padrão que onNewOrder já usa corretamente ao lado.
+    const listener = (_e: unknown, err: string) => cb(err)
+    ipcRenderer.on('print-error', listener)
+    return () => ipcRenderer.removeListener('print-error', listener)
   },
   onNewOrder: (cb: (info: { id: string; label: string; canal: string; customerName: string; isPickup: boolean }) => void) => {
     const listener = (_e: unknown, info: { id: string; label: string; canal: string; customerName: string; isPickup: boolean }) => cb(info)
@@ -35,10 +39,10 @@ contextBridge.exposeInMainWorld('api', {
   pairDevice:          (url: string, code: string)                  => ipcRenderer.invoke('pair-device', url, code),
   removeConnection:    (id: string)                                 => ipcRenderer.invoke('remove-connection', id),
   getWhatsappStatus:   ()                                          => ipcRenderer.invoke('get-whatsapp-status'),
-  getWhatsappMessages: (conversationId: string)                   => ipcRenderer.invoke('get-whatsapp-messages', conversationId),
-  sendWhatsappReply:   (conversationId: string, message: string) => ipcRenderer.invoke('send-whatsapp-reply', conversationId, message),
-  resumeWhatsappBot:   (conversationId: string)                   => ipcRenderer.invoke('resume-whatsapp-bot', conversationId),
-  markWhatsappConversationSeen: (conversationId: string)          => ipcRenderer.invoke('mark-whatsapp-conversation-seen', conversationId),
+  getWhatsappMessages: (conversationId: string, connectionId?: string) => ipcRenderer.invoke('get-whatsapp-messages', conversationId, connectionId),
+  sendWhatsappReply:   (conversationId: string, message: string, connectionId?: string) => ipcRenderer.invoke('send-whatsapp-reply', conversationId, message, connectionId),
+  resumeWhatsappBot:   (conversationId: string, connectionId?: string) => ipcRenderer.invoke('resume-whatsapp-bot', conversationId, connectionId),
+  markWhatsappConversationSeen: (conversationId: string, connectionId?: string) => ipcRenderer.invoke('mark-whatsapp-conversation-seen', conversationId, connectionId),
   getNotificationSounds: () => ipcRenderer.invoke('get-notification-sounds'),
   minimizeWindow: () => ipcRenderer.invoke('window-minimize'),
   toggleMaximizeWindow: () => ipcRenderer.invoke('window-toggle-maximize'),

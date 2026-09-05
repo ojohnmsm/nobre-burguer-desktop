@@ -3,6 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      O renderer não faz fetch/XHR direto: toda chamada ao servidor passa por
+      IPC pro processo principal, fora do alcance da CSP. A única saída de
+      rede daqui é o áudio de notificação (lib/notification-sound.ts),
+      hospedado no Supabase Storage — daí o media-src à parte.
+
+      script-src fica estrito ('self', sem inline) — é onde a CSP realmente
+      protege contra injeção. style-src leva 'unsafe-inline' de propósito: o
+      `npm run dev` do electron-vite injeta <style> via JS para o hot-reload
+      do CSS, e travar isso quebraria o dia a dia de quem desenvolve; o build
+      de produção (dist/index.html, conferido) não usa nenhum script nem
+      style inline, então essa concessão não abre mão de proteção nenhuma lá.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' https://*.supabase.co; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none';" />
     <title>Cardapia — Pedidos</title>
   </head>
   <body>

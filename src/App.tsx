@@ -10,7 +10,7 @@ import { CapivaraMark } from './components/CapivaraMark'
 import { ehMarketplace, KANBAN_COLUMNS, STATUS_LABELS, type Order, type OrderStatus } from './types'
 import { rankStatus } from './orderFlow'
 import { compararFilaCozinha } from './orderTiming'
-import type { WhatsappStatusConversation } from './electron-api'
+import type { WhatsappConnectionState, WhatsappStatusConversation } from './electron-api'
 import { loadNotificationSounds, playDriverArrivedAlert, playMessageAlert, playOrderAlert } from './notification-sound'
 
 type Tab = 'kanban' | 'historico' | 'whatsapp' | 'settings'
@@ -23,6 +23,15 @@ const HISTORY_PAGE_SIZE = 30
 // Pix ou cartão online ainda pendente na tela, no som ou na impressão.
 function isOperationalOrder(order: Order): boolean {
   return order.status !== 'awaiting_payment'
+}
+
+// Com uma loja só, `storeLabel` vem vazio (ver get-whatsapp-status em
+// main.ts) e isto mostra só o estado, igual ao texto de antes de existir
+// mais de uma conexão. Com mais de uma, nomeia qual está desconectada.
+function rotuloLojasDesconectadas(desconectadas: WhatsappConnectionState[]): string {
+  if (desconectadas.length === 0) return ''
+  const partes = desconectadas.map(cs => cs.storeLabel ? `${cs.storeLabel}: ${cs.state}` : cs.state)
+  return ` (${partes.join(', ')})`
 }
 
 export default function App() {
@@ -224,10 +233,24 @@ export default function App() {
   const loadHistory = useCallback(async (reset: boolean) => {
     reset ? setHistoryLoading(true) : setHistoryLoadingMore(true)
     try {
-      const offset = reset ? 0 : historyOrders.length
-      const fetched = await window.api.fetchOrderHistory({ limit: HISTORY_PAGE_SIZE, offset, status: historyStatusFilter })
+      // Por CONEXÃO, não um offset só: cada loja informa quantas linhas DELA
+      // já estão na tela, contadas do que já carregamos — não uma divisão
+      // igual do total. Loja sem nenhuma linha ainda carregada começa do 0.
+      const offsetsPorConexao: Record<string, number> = {}
+      if (!reset) {
+        for (const order of historyOrders) {
+          const connId = order.connectionId
+          if (!connId) continue
+          offsetsPorConexao[connId] = (offsetsPorConexao[connId] ?? 0) + 1
+        }
+      }
+      const { orders: fetched, hasMore } = await window.api.fetchOrderHistory({
+        limit: HISTORY_PAGE_SIZE,
+        offsetsPorConexao,
+        status: historyStatusFilter,
+      })
       setHistoryOrders(previous => reset ? fetched : [...previous, ...fetched])
-      setHistoryHasMore(fetched.length === HISTORY_PAGE_SIZE)
+      setHistoryHasMore(hasMore)
     } catch {
       addNotification('Não foi possível carregar o histórico')
     } finally {
@@ -247,8 +270,8 @@ export default function App() {
   // local — senão o alerta sonoro voltava toda vez que o app reiniciava ou
   // era usado em outro PC, mesmo já tendo sido lido.
   const [whatsappConversations, setWhatsappConversations] = useState<WhatsappStatusConversation[]>([])
-  const [connectionState, setConnectionState] = useState<string | null>(null)
-  const [openConversationId, setOpenConversationId] = useState<string | null>(null)
+  const [connectionStates, setConnectionStates] = useState<WhatsappConnectionState[]>([])
+  const [openConversation, setOpenConversation] = useState<WhatsappStatusConversation | null>(null)
 
   function conversationNeedsAttention(conversation: WhatsappStatusConversation): boolean {
     if (!conversation.lastMessage || conversation.lastMessage.role !== 'customer') return false
@@ -256,7 +279,10 @@ export default function App() {
   }
 
   const conversationsNeedingAttention = whatsappConversations.filter(conversationNeedsAttention)
-  const whatsappDisconnected = connectionState !== null && connectionState !== 'open'
+  // Cada loja tem a própria instância — uma desconectada já é o suficiente
+  // pro alerta, mesmo com as outras normais.
+  const conexoesWhatsappDesconectadas = connectionStates.filter(cs => cs.state !== 'open')
+  const whatsappDisconnected = conexoesWhatsappDesconectadas.length > 0
   const hasUrgentAlert = unacknowledgedOrders.length > 0 || conversationsNeedingAttention.length > 0 || whatsappDisconnected
 
   // Alerta sonoro toca UMA vez quando aparece, não em laço até reconhecer. O
@@ -272,7 +298,7 @@ export default function App() {
     try {
       const data = await window.api.getWhatsappStatus()
       setWhatsappConversations(data.conversations ?? [])
-      setConnectionState(data.connectionState ?? null)
+      setConnectionStates(data.connectionStates ?? [])
     } catch {
       // Silencioso: não deve travar o resto do app se o WhatsApp estiver fora do ar.
     }
@@ -288,22 +314,22 @@ export default function App() {
     }
   }, [configured, loadWhatsappStatus])
 
-  function markConversationSeen(conversationId: string) {
+  function markConversationSeen(conversation: WhatsappStatusConversation) {
     const seenAt = new Date().toISOString()
-    setWhatsappConversations(previous => previous.map(conversation =>
-      conversation.id === conversationId ? { ...conversation, lastSeenAt: seenAt } : conversation
+    setWhatsappConversations(previous => previous.map(c =>
+      c.id === conversation.id ? { ...c, lastSeenAt: seenAt } : c
     ))
-    void window.api.markWhatsappConversationSeen(conversationId)
+    void window.api.markWhatsappConversationSeen(conversation.id, conversation.connectionId)
   }
 
-  function openWhatsappConversation(conversationId: string) {
-    markConversationSeen(conversationId)
-    setOpenConversationId(conversationId)
+  function openWhatsappConversation(conversation: WhatsappStatusConversation) {
+    markConversationSeen(conversation)
+    setOpenConversation(conversation)
   }
 
   function closeWhatsappConversation() {
-    if (openConversationId) markConversationSeen(openConversationId)
-    setOpenConversationId(null)
+    if (openConversation) markConversationSeen(openConversation)
+    setOpenConversation(null)
   }
 
   async function updateStatus(id: string, status: OrderStatus) {
@@ -501,7 +527,9 @@ export default function App() {
         </div>
       </div>
 
-      {tab !== 'whatsapp' && tab !== 'settings' && <DisputasPanel notify={addNotification} />}
+      {tab !== 'whatsapp' && tab !== 'settings' && (
+        <DisputasPanel notify={addNotification} temIfood={stores.some(s => s.ifoodConectado)} />
+      )}
 
       {hasUrgentAlert && tab !== 'whatsapp' && (
         <div className="flex items-center justify-between gap-3 flex-wrap px-3 py-2 bg-red-500/10 border-b border-red-500/30 flex-shrink-0">
@@ -513,7 +541,7 @@ export default function App() {
             )}
             {whatsappDisconnected && (
                 <span className="flex items-center gap-1.5 text-[var(--danger)] font-bold">
-                <WifiOff size={12} /> WhatsApp desconectado{connectionState ? ` (${connectionState})` : ''}
+                <WifiOff size={12} /> WhatsApp desconectado{rotuloLojasDesconectadas(conexoesWhatsappDesconectadas)}
               </span>
             )}
             {conversationsNeedingAttention.length > 0 && (
@@ -529,7 +557,7 @@ export default function App() {
               </button>
             )}
             {conversationsNeedingAttention.length > 0 && (
-              <button onClick={() => openWhatsappConversation(conversationsNeedingAttention[0].id)} className="text-[11px] px-2.5 py-1 rounded-lg bg-[var(--primary)] text-[var(--primary-fg)] font-bold">
+              <button onClick={() => openWhatsappConversation(conversationsNeedingAttention[0])} className="text-[11px] px-2.5 py-1 rounded-lg bg-[var(--primary)] text-[var(--primary-fg)] font-bold">
                 Ver conversa
               </button>
             )}
@@ -544,7 +572,7 @@ export default function App() {
           <div className="h-full overflow-y-auto p-3">
             {whatsappDisconnected && (
               <div className="flex items-center gap-1.5 text-[var(--danger)] font-bold text-sm rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 mb-3">
-                <WifiOff size={14} /> WhatsApp desconectado{connectionState ? ` (${connectionState})` : ''}
+                <WifiOff size={14} /> WhatsApp desconectado{rotuloLojasDesconectadas(conexoesWhatsappDesconectadas)}
               </div>
             )}
             {whatsappConversations.length === 0 ? (
@@ -556,7 +584,7 @@ export default function App() {
                   return (
                     <button
                       key={conversation.id}
-                      onClick={() => openWhatsappConversation(conversation.id)}
+                      onClick={() => openWhatsappConversation(conversation)}
                       className="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left rounded-xl bg-[var(--card)] border border-[var(--border)] hover:bg-[var(--border-light)] transition-colors shadow-[var(--shadow-sm)]"
                     >
                       <div className="min-w-0">
@@ -570,6 +598,10 @@ export default function App() {
                           }`}>
                             {conversation.status === 'awaiting_human' ? 'aguardando' : 'manual'}
                           </span>
+                          {/* A etiqueta da loja só aparece com mais de uma ligada — ver o mesmo padrão no OrderCard. */}
+                          {conversation.storeLabel && (
+                            <span className="text-[9px] text-[var(--text-muted)] truncate">{conversation.storeLabel}</span>
+                          )}
                         </div>
                         {conversation.lastMessage?.content && (
                           <p className="text-xs text-[var(--text-muted)] truncate">{conversation.lastMessage.content}</p>
@@ -583,9 +615,10 @@ export default function App() {
           </div>
         )}
 
-        {openConversationId && (
+        {openConversation && (
           <WhatsappPanel
-            conversationId={openConversationId}
+            conversationId={openConversation.id}
+            connectionId={openConversation.connectionId}
             onClose={closeWhatsappConversation}
             onChanged={() => void loadWhatsappStatus()}
           />

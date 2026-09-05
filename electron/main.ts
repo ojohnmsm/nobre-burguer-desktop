@@ -920,10 +920,61 @@ async function vigiarPedidosNovos() {
   }
 }
 
-ipcMain.handle('fetch-order-history', async (_e, opts: { limit: number; offset: number; status?: string }) => {
-  const params = new URLSearchParams({ history: 'true', limit: String(opts.limit), offset: String(opts.offset) })
-  if (opts.status) params.set('status', opts.status)
-  return buscarEmTodasAsLojas(`/api/desktop/orders?${params.toString()}`)
+/**
+ * Histórico paginado, por CONEXÃO — não um offset só compartilhado.
+ *
+ * O jeito antigo mandava o MESMO offset pras duas lojas e devolvia tudo sem
+ * cortar: com duas lojas ligadas, uma "página" de 30 virava até 60 linhas, e
+ * `hasMore` (que só olhava `fetched.length === 30`) quase nunca batia — o
+ * botão "carregar mais" sumia cedo demais. Aqui cada conexão pede a partir de
+ * QUANTAS LINHAS DELA já apareceram na tela (o renderer manda isso, contado do
+ * que já tem em `historyOrders`), e a mescla corta pro tamanho pedido — o que
+ * sobra da mescla não se perde, só aparece na página seguinte.
+ */
+ipcMain.handle('fetch-order-history', async (
+  _e,
+  opts: { limit: number; offsetsPorConexao?: Record<string, number>; status?: string }
+) => {
+  const conexoes = getConnections()
+  const etiquetar = conexoes.length > 1
+  const offsets = opts.offsetsPorConexao ?? {}
+
+  const resultados = await Promise.allSettled(
+    conexoes.map(async (conexao) => {
+      const offset = offsets[conexao.id] ?? 0
+      const params = new URLSearchParams({ history: 'true', limit: String(opts.limit), offset: String(offset) })
+      if (opts.status) params.set('status', opts.status)
+      const pedidos = await buscarPedidosComEtag(conexao, `/api/desktop/orders?${params.toString()}`)
+      return pedidos.map((p) => ({
+        ...p,
+        connectionId: conexao.id,
+        storeLabel: etiquetar ? conexao.label || 'Loja' : '',
+      }))
+    })
+  )
+
+  let totalAntesDoCorte = 0
+  let algumaPaginaCheia = false
+  const juntos: Record<string, unknown>[] = []
+  for (const r of resultados) {
+    if (r.status !== 'fulfilled') continue
+    totalAntesDoCorte += r.value.length
+    if (r.value.length === opts.limit) algumaPaginaCheia = true
+    juntos.push(...r.value)
+  }
+
+  const ordenados = juntos.sort((a, b) => {
+    const da = String(a.created_at ?? '')
+    const db = String(b.created_at ?? '')
+    return db.localeCompare(da)
+  })
+
+  return {
+    orders: ordenados.slice(0, opts.limit),
+    // A mesma folga que a versão de uma loja já usava (>= um lote cheio pode
+    // ter mais) — só que agora também considera o que a mescla cortou.
+    hasMore: totalAntesDoCorte > opts.limit || algumaPaginaCheia,
+  }
 })
 
 ipcMain.handle('update-order-status', async (_e, orderId: string, status: string, connectionId?: string) => {
@@ -1091,33 +1142,75 @@ ipcMain.handle('get-stores', async () => {
   return resultado
 })
 
+/**
+ * Busca em TODAS as lojas ligadas — o WhatsApp é uma instância própria por
+ * loja, igual pedidos e disputas. Antes esta rota só falava com a PRIMEIRA
+ * conexão (era o que `desktopRequest` devolve sem `connectionId`): um balcão
+ * atendendo duas lojas só via conversa da primeira pelo WhatsApp, e a segunda
+ * simplesmente não aparecia.
+ */
 ipcMain.handle('get-whatsapp-status', async () => {
-  return desktopRequest('/api/desktop/whatsapp/status')
+  const conexoes = getConnections()
+  const etiquetar = conexoes.length > 1
+
+  const resultados = await Promise.allSettled(
+    conexoes.map(async (c) => {
+      const r = await desktopRequest<{ conversations: Record<string, unknown>[]; connectionState: string }>(
+        '/api/desktop/whatsapp/status', {}, c.id
+      )
+      const storeLabel = etiquetar ? c.label || 'Loja' : ''
+      return {
+        connectionId: c.id,
+        storeLabel,
+        connectionState: r.connectionState,
+        conversations: (r.conversations ?? []).map((conv) => ({ ...conv, connectionId: c.id, storeLabel })),
+      }
+    })
+  )
+
+  const conversations: Record<string, unknown>[] = []
+  const connectionStates: { connectionId: string; storeLabel: string; state: string }[] = []
+  for (const r of resultados) {
+    // Falha nesta conexão fica de fora, sem marcar como "desconectada" — pode
+    // ser só o servidor daquela loja fora do ar por um instante, e não o
+    // WhatsApp em si; `stores` (get-stores) já cobre "loja fora do ar".
+    if (r.status !== 'fulfilled') continue
+    conversations.push(...r.value.conversations)
+    connectionStates.push({ connectionId: r.value.connectionId, storeLabel: r.value.storeLabel, state: r.value.connectionState })
+  }
+
+  conversations.sort((a, b) => {
+    const da = String(a.updatedAt ?? '')
+    const db = String(b.updatedAt ?? '')
+    return db.localeCompare(da)
+  })
+
+  return { conversations, connectionStates }
 })
 
-ipcMain.handle('get-whatsapp-messages', async (_e, conversationId: string) => {
-  return desktopRequest(`/api/desktop/whatsapp/conversations/${encodeURIComponent(conversationId)}/messages`)
+ipcMain.handle('get-whatsapp-messages', async (_e, conversationId: string, connectionId?: string) => {
+  return desktopRequest(`/api/desktop/whatsapp/conversations/${encodeURIComponent(conversationId)}/messages`, {}, connectionId)
 })
 
-ipcMain.handle('send-whatsapp-reply', async (_e, conversationId: string, message: string) => {
+ipcMain.handle('send-whatsapp-reply', async (_e, conversationId: string, message: string, connectionId?: string) => {
   await desktopRequest(`/api/desktop/whatsapp/conversations/${encodeURIComponent(conversationId)}/reply`, {
     method: 'POST',
     body: JSON.stringify({ message }),
-  })
+  }, connectionId)
   return true
 })
 
-ipcMain.handle('resume-whatsapp-bot', async (_e, conversationId: string) => {
+ipcMain.handle('resume-whatsapp-bot', async (_e, conversationId: string, connectionId?: string) => {
   await desktopRequest(`/api/desktop/whatsapp/conversations/${encodeURIComponent(conversationId)}/resume-bot`, {
     method: 'POST',
-  })
+  }, connectionId)
   return true
 })
 
-ipcMain.handle('mark-whatsapp-conversation-seen', async (_e, conversationId: string) => {
+ipcMain.handle('mark-whatsapp-conversation-seen', async (_e, conversationId: string, connectionId?: string) => {
   await desktopRequest(`/api/desktop/whatsapp/conversations/${encodeURIComponent(conversationId)}/seen`, {
     method: 'POST',
-  })
+  }, connectionId)
   return true
 })
 

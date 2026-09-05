@@ -91,11 +91,21 @@ export interface WhatsappStatusConversation {
   updatedAt: string
   lastMessage: { role: string; content: string | null; createdAt: string } | null
   lastSeenAt: string | null
+  /** De qual loja é esta conversa — ausente/vazia com uma loja só ligada. */
+  connectionId?: string
+  storeLabel?: string
+}
+
+export interface WhatsappConnectionState {
+  connectionId: string
+  storeLabel: string
+  state: string
 }
 
 export interface WhatsappStatusResponse {
   conversations: WhatsappStatusConversation[]
-  connectionState: string
+  /** Uma por loja ligada — o WhatsApp é uma instância própria por loja, não um estado só. */
+  connectionStates: WhatsappConnectionState[]
 }
 
 export interface WhatsappConversationDetail {
@@ -130,7 +140,8 @@ declare global {
       getPrinters: () => Promise<PrinterInfo[]>
       printOrder: (order: Order) => Promise<'ok' | 'no-printer' | 'error'>
       fetchOrders: () => Promise<Order[]>
-      fetchOrderHistory: (opts: { limit: number; offset: number; status?: OrderStatus | '' }) => Promise<Order[]>
+      /** offsetsPorConexao: quantas linhas DE CADA loja já apareceram — não um offset só compartilhado (ver fetch-order-history em main.ts). */
+      fetchOrderHistory: (opts: { limit: number; offsetsPorConexao?: Record<string, number>; status?: OrderStatus | '' }) => Promise<{ orders: Order[]; hasMore: boolean }>
       updateOrderStatus: (id: string, status: OrderStatus, connectionId?: string) => Promise<UpdateStatusResult>
       acknowledgeOrder: (id: string, connectionId?: string) => Promise<boolean>
       getIfoodCancelReasons: (id: string, connectionId?: string) => Promise<{ ok: boolean; reasons?: IfoodCancelReason[]; error?: string }>
@@ -149,10 +160,10 @@ declare global {
       pairDevice: (url: string, code: string) => Promise<{ erro?: string; storeName?: string | null }>
       removeConnection: (id: string) => Promise<{ ok: boolean }>
       getWhatsappStatus: () => Promise<WhatsappStatusResponse>
-      getWhatsappMessages: (conversationId: string) => Promise<WhatsappMessagesResponse>
-      sendWhatsappReply: (conversationId: string, message: string) => Promise<boolean>
-      resumeWhatsappBot: (conversationId: string) => Promise<boolean>
-      markWhatsappConversationSeen: (conversationId: string) => Promise<boolean>
+      getWhatsappMessages: (conversationId: string, connectionId?: string) => Promise<WhatsappMessagesResponse>
+      sendWhatsappReply: (conversationId: string, message: string, connectionId?: string) => Promise<boolean>
+      resumeWhatsappBot: (conversationId: string, connectionId?: string) => Promise<boolean>
+      markWhatsappConversationSeen: (conversationId: string, connectionId?: string) => Promise<boolean>
       getNotificationSounds: () => Promise<NotificationSoundsResponse>
       minimizeWindow: () => Promise<void>
       toggleMaximizeWindow: () => Promise<boolean>

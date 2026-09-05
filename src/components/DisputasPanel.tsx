@@ -44,7 +44,7 @@ function reais(cents: number): string {
   return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
-export function DisputasPanel({ notify }: { notify: (message: string) => void }) {
+export function DisputasPanel({ notify, temIfood }: { notify: (message: string) => void; temIfood: boolean }) {
   const [disputas, setDisputas] = useState<IfoodDispute[]>([])
   const [carregando, setCarregando] = useState(true)
   const [ocupado, setOcupado] = useState<string | null>(null)
@@ -61,12 +61,15 @@ export function DisputasPanel({ notify }: { notify: (message: string) => void })
     }
   }, [])
 
+  // Nenhuma loja ligada tem iFood conectado: a rota sempre voltaria vazia, e
+  // não há por que gastar uma requisição por minuto perguntando isso de novo.
   useEffect(() => {
+    if (!temIfood) return
     void carregar()
     const busca = setInterval(() => void carregar(), 60_000)
     const relogio = setInterval(() => setAgora(Date.now()), 30_000)
     return () => { clearInterval(busca); clearInterval(relogio) }
-  }, [carregar])
+  }, [carregar, temIfood])
 
   async function responder(disputa: IfoodDispute, resposta: 'accept' | 'reject') {
     let motivo: string | null = null
@@ -85,7 +88,7 @@ export function DisputasPanel({ notify }: { notify: (message: string) => void })
     }
   }
 
-  if (carregando || disputas.length === 0) return null
+  if (!temIfood || carregando || disputas.length === 0) return null
 
   return (
     <div className="px-3 py-2.5 bg-red-500/10 border-b border-red-500/30 flex-shrink-0 space-y-2">

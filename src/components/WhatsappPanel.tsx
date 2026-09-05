@@ -4,6 +4,7 @@ import type { WhatsappConversationDetail, WhatsappMessage } from '../electron-ap
 
 interface Props {
   conversationId: string
+  connectionId?: string
   onClose: () => void
   onChanged: () => void
 }
@@ -26,7 +27,7 @@ function roleLabel(role: WhatsappMessage['role']) {
   return null
 }
 
-export function WhatsappPanel({ conversationId, onClose, onChanged }: Props) {
+export function WhatsappPanel({ conversationId, connectionId, onClose, onChanged }: Props) {
   const [conversation, setConversation] = useState<WhatsappConversationDetail | null>(null)
   const [messages, setMessages] = useState<WhatsappMessage[]>([])
   const [loading, setLoading] = useState(true)
@@ -38,7 +39,7 @@ export function WhatsappPanel({ conversationId, onClose, onChanged }: Props) {
 
   const load = async () => {
     try {
-      const data = await window.api.getWhatsappMessages(conversationId)
+      const data = await window.api.getWhatsappMessages(conversationId, connectionId)
       setConversation(data.conversation)
       setMessages(data.messages ?? [])
     } catch {
@@ -56,7 +57,7 @@ export function WhatsappPanel({ conversationId, onClose, onChanged }: Props) {
       window.clearInterval(interval)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversationId])
+  }, [conversationId, connectionId])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -67,7 +68,7 @@ export function WhatsappPanel({ conversationId, onClose, onChanged }: Props) {
     if (!message || sending) return
     setSending(true)
     try {
-      await window.api.sendWhatsappReply(conversationId, message)
+      await window.api.sendWhatsappReply(conversationId, message, connectionId)
       setReply('')
       onChanged()
       window.setTimeout(() => { void load() }, 1500)
@@ -81,7 +82,7 @@ export function WhatsappPanel({ conversationId, onClose, onChanged }: Props) {
   async function resumeBot() {
     setResuming(true)
     try {
-      await window.api.resumeWhatsappBot(conversationId)
+      await window.api.resumeWhatsappBot(conversationId, connectionId)
       onChanged()
       void load()
     } catch {
