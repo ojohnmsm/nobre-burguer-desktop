@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { ChevronDown, ChevronUp, Printer, Clock, Phone, MapPin, MessageSquare } from 'lucide-react'
 import { Order, OrderStatus, STATUS_LABELS, PAYMENT_LABELS, fmtMoney, timeAgo , ehMarketplace} from '../types'
 import { orderLabel } from '../orderLabel'
@@ -21,12 +21,24 @@ interface Props {
   onStatus: (id: string, status: OrderStatus) => void
   onPrint: (order: Order) => void
   onCancelIfood?: (order: Order) => void
-  onOpen?: () => void
+  onOpen?: (id: string) => void
+  /**
+   * "Agora", em blocos de 15s — não `Date.now()` cru. O card precisa
+   * redesenhar quando o tempo passa (a cor de urgência e o "há Xmin" têm que
+   * avançar mesmo sem nenhum dado mudar), mas só isto: se cada render lesse
+   * `Date.now()` direto, o React.memo abaixo nunca bateria uma comparação
+   * igual, porque o valor seria sempre diferente — o memo não serviria pra
+   * nada. Vindo como prop (calculado uma vez por leva de pedidos, no
+   * App.tsx), os cartões que não mudaram em nada pulam o redesenho entre uma
+   * leva e outra dentro do mesmo bloco de 15s.
+   */
+  agoraBucket: number
   compact?: boolean
 }
 
-export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, compact = false }: Props) {
+function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraBucket, compact = false }: Props) {
   const [open, setOpen] = useState(false)
+  const agora = agoraBucket * 15000
   const isIfood = order.channel === 'ifood'
   // Vale para qualquer marketplace; `isIfood` fica só para o que é do iFood.
   const doMarketplace = ehMarketplace(order.channel)
@@ -37,11 +49,11 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
   // (updated_at), em vez de correr para sempre.
   const cozinhaConcluiu = isTerminal
     || (doMarketplace && (order.status === 'ready_to_pickup' || order.status === 'out_for_delivery'))
-  const fim = cozinhaConcluiu ? new Date(order.updated_at).getTime() : Date.now()
+  const fim = cozinhaConcluiu ? new Date(order.updated_at).getTime() : agora
   const ago = timeAgo(order.created_at, fim)
   const isOld = !cozinhaConcluiu && (fim - new Date(order.created_at).getTime()) > 30 * 60000
-  const preparo = preparoInfo(order, order.prep_target_minutes ?? 0)
-  const urgencia = nivelUrgencia(order)
+  const preparo = preparoInfo(order, order.prep_target_minutes ?? 0, agora)
+  const urgencia = nivelUrgencia(order, agora)
   const driver = order.ifood_driver ?? null
   const proxima = proximaEtapa(order)
   const isPickup = order.fulfillment_type === 'pickup'
@@ -75,7 +87,7 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
         className="w-full p-3 flex items-start gap-2 text-left hover:bg-[var(--border-light)] transition-colors"
         onClick={() => setOpen(v => {
           const next = !v
-          if (next) onOpen?.()
+          if (next) onOpen?.(order.id)
           return next
         })}
       >
@@ -261,6 +273,13 @@ export function OrderCard({ order, onStatus, onPrint, onCancelIfood, onOpen, com
     </div>
   )
 }
+
+// Comparação padrão (rasa, todas as props) — funciona porque `order` chega
+// com referência ESTÁVEL do App.tsx quando o conteúdo não muda entre levas
+// (ver a estabilização em aplicarPedidosRecebidos); sem aquilo, o clone
+// estruturado do IPC criaria um objeto novo a cada leva e este memo nunca
+// bateria nada.
+export const OrderCard = memo(OrderCardImpl)
 
 /**
  * Cor estável a partir do nome da loja.

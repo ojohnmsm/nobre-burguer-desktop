@@ -51,6 +51,22 @@ export default function App() {
   const optimisticRef = useRef<Map<string, { status: OrderStatus; ts: number }>>(new Map())
   const [windowMaximized, setWindowMaximized] = useState(false)
 
+  // Espelha `orders` — permite updateStatus/ackOrder lerem o pedido mais
+  // recente sem precisar de `orders` como dependência do próprio useCallback,
+  // o que os recriaria a cada leva nova e anularia o React.memo(OrderCard).
+  const ordersRef = useRef<Order[]>([])
+  function setOrdersSynced(updater: (previous: Order[]) => Order[]) {
+    setOrders(previous => {
+      const next = updater(previous)
+      ordersRef.current = next
+      return next
+    })
+  }
+
+  // "Agora" para os cartões, em blocos de 15s — ver o comentário na prop
+  // `agoraBucket` de OrderCard sobre por que não é só `Date.now()` no render.
+  const [agoraBucket, setAgoraBucket] = useState(() => Math.floor(Date.now() / 15000))
+
   // ── Pedidos novos não vistos (abrir o card reconhece) ──────────────────────
   // O "visto" é persistido no banco (orders.acknowledged_at) via API em vez
   // de ficar só em memória local — assim o alerta sincroniza entre todos os
@@ -64,14 +80,18 @@ export default function App() {
       && order.status !== 'cancelled'
   )
 
-  function ackOrder(orderId: string) {
-    setOrders(previous => previous.map(order =>
+  const ackOrder = useCallback((orderId: string) => {
+    // Lido ANTES do setOrders, igual o closure de `orders` fazia antes — o
+    // connectionId de um pedido não muda, então não precisa refletir a
+    // atualização que está prestes a acontecer.
+    const connectionId = ordersRef.current.find(o => o.id === orderId)?.connectionId
+    setOrdersSynced(previous => previous.map(order =>
       order.id === orderId && !order.acknowledged_at
         ? { ...order, acknowledged_at: new Date().toISOString() }
         : order
     ))
-    void window.api.acknowledgeOrder(orderId, orders.find(o => o.id === orderId)?.connectionId)
-  }
+    void window.api.acknowledgeOrder(orderId, connectionId)
+  }, [])
 
   const addNotification = useCallback((message: string) => {
     setNotifications(previous => [message, ...previous].slice(0, 5))
@@ -104,7 +124,23 @@ export default function App() {
       return { ...order, status: opt.status }
     })
 
-    setOrders(comOtimista)
+    // Estabiliza a referência: reaproveita o objeto ANTERIOR quando o
+    // conteúdo é idêntico. Todo pedido chega do IPC com objeto NOVO (clone
+    // estruturado, sempre), então sem isto o React.memo(OrderCard) nunca
+    // bateria uma comparação igual mesmo quando nada mudou de verdade — e
+    // cada cartão redesenharia a cada leva à toa. JSON.stringify (não uma
+    // lista de campos à mão) porque um campo novo em Order não pode virar um
+    // bug silencioso de "esqueceram de comparar esse campo": o pior caso de
+    // errar aqui é só um redesenho a mais, nunca um a menos.
+    const anterioresPorId = new Map(ordersRef.current.map(o => [o.id, o]))
+    const estabilizados = comOtimista.map(order => {
+      const anterior = anterioresPorId.get(order.id)
+      return (anterior && JSON.stringify(anterior) === JSON.stringify(order)) ? anterior : order
+    })
+
+    ordersRef.current = estabilizados
+    setOrders(estabilizados)
+    setAgoraBucket(Math.floor(agoraMerge / 15000))
     hasLoadedOrdersRef.current = true
 
     // Pedido NOVO (alerta sonoro + toast + impressão) é responsabilidade do
@@ -138,7 +174,7 @@ export default function App() {
       const data = await window.api.fetchOrders()
       aplicarPedidosRecebidos(data)
     } catch {
-      if (!hasLoadedOrdersRef.current) setOrders([])
+      if (!hasLoadedOrdersRef.current) { ordersRef.current = []; setOrders([]) }
       addNotification('Não foi possível atualizar os pedidos')
     } finally {
       setLoading(false)
@@ -332,11 +368,13 @@ export default function App() {
     setOpenConversation(null)
   }
 
-  async function updateStatus(id: string, status: OrderStatus) {
+  const updateStatus = useCallback(async (id: string, status: OrderStatus) => {
     // A conexão de origem viaja junto com o pedido. Sem ela, mudar o status de
     // um pedido da segunda loja iria para o servidor da primeira — que
-    // responderia "não encontrado", ou acertaria outro pedido por acaso.
-    const alvo = orders.find(o => o.id === id)
+    // responderia "não encontrado", ou acertaria outro pedido por acaso. Lido
+    // de ordersRef (não do state `orders`) pra esta função manter identidade
+    // estável entre renders — ver o comentário em ordersRef.
+    const alvo = ordersRef.current.find(o => o.id === id)
     const doMarketplace = alvo ? ehMarketplace(alvo.channel) : false
     const anterior = alvo?.status
 
@@ -345,7 +383,7 @@ export default function App() {
     // falhar, volta.
     if (doMarketplace) {
       optimisticRef.current.set(id, { status, ts: Date.now() })
-      setOrders(previous => previous.map(order => order.id === id ? { ...order, status } : order))
+      setOrdersSynced(previous => previous.map(order => order.id === id ? { ...order, status } : order))
     }
 
     const res = await window.api.updateOrderStatus(id, status, alvo?.connectionId)
@@ -353,7 +391,7 @@ export default function App() {
     if (!res.ok) {
       if (doMarketplace && anterior) {
         optimisticRef.current.delete(id)
-        setOrders(previous => previous.map(order => order.id === id ? { ...order, status: anterior } : order))
+        setOrdersSynced(previous => previous.map(order => order.id === id ? { ...order, status: anterior } : order))
       }
       addNotification(res.error || 'Não foi possível atualizar o status do pedido')
       return
@@ -367,17 +405,17 @@ export default function App() {
       return
     }
     optimisticRef.current.delete(id)
-    setOrders(previous => previous.map(order => order.id === id ? { ...order, status } : order))
-  }
+    setOrdersSynced(previous => previous.map(order => order.id === id ? { ...order, status } : order))
+  }, [addNotification])
 
   const [cancelandoIfood, setCancelandoIfood] = useState<Order | null>(null)
   const [pausePanelOpen, setPausePanelOpen] = useState(false)
 
-  async function printOrder(order: Order) {
+  const printOrder = useCallback(async (order: Order) => {
     const result = await window.api.printOrder(order)
     if (result === 'no-printer') addNotification('Configure a impressora nas configurações')
     if (result === 'error') addNotification('Não foi possível imprimir a comanda')
-  }
+  }, [addNotification])
 
   async function toggleAutoPrint() {
     const nextValue = !autoPrint
@@ -646,7 +684,7 @@ export default function App() {
               <>
                 <div className="space-y-2">
                   {historyOrders.map(order => (
-                    <OrderCard key={order.id} order={order} onStatus={updateStatus} onPrint={printOrder} onCancelIfood={setCancelandoIfood} />
+                    <OrderCard key={order.id} order={order} onStatus={updateStatus} onPrint={printOrder} onCancelIfood={setCancelandoIfood} agoraBucket={agoraBucket} />
                   ))}
                 </div>
                 {historyHasMore && (
@@ -699,7 +737,8 @@ export default function App() {
                         onStatus={updateStatus}
                         onPrint={printOrder}
                         onCancelIfood={setCancelandoIfood}
-                        onOpen={() => ackOrder(order.id)}
+                        onOpen={ackOrder}
+                        agoraBucket={agoraBucket}
                         compact
                       />
                     ))}
