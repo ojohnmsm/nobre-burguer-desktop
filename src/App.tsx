@@ -713,7 +713,8 @@ export default function App() {
         )}
 
         {tab === 'kanban' && configured && (
-          <div className="h-full flex gap-0 overflow-x-auto">
+          <div className="h-full overflow-x-auto bg-[var(--bg)] p-3">
+            <div className="flex h-full min-w-max gap-3">
             {KANBAN_COLUMNS.map(column => {
               // A coluna é uma fila: pendência no topo, depois urgência
               // (vermelho → amarelo → verde), depois o mais velho. `.filter`
@@ -722,12 +723,12 @@ export default function App() {
                 .filter(order => column.statuses.includes(order.status))
                 .sort((a, b) => compararFilaCozinha(a, b))
               return (
-                <div key={column.id} className="flex-1 min-w-[168px] flex flex-col border-r border-[var(--border)] last:border-0">
-                  <div className="px-3 py-2.5 border-b-2 flex items-center justify-between flex-shrink-0" style={{ borderBottomColor: column.accent }}>
-                    <span className="font-bold text-sm" style={{ color: column.accent }}>{column.label}</span>
-                    {columnOrders.length > 0 && <span className="text-[11px] font-bold rounded-full w-5 h-5 flex items-center justify-center" style={{ background: `${column.accent}22`, color: column.accent }}>{columnOrders.length}</span>}
+                <div key={column.id} className="flex w-[220px] flex-col overflow-hidden rounded-xl border border-[var(--border)] border-t-4 bg-[var(--surface)]" style={{ borderTopColor: column.accent }}>
+                  <div className="flex items-center justify-between px-3 py-2.5 flex-shrink-0">
+                    <span className="font-bold text-sm text-[var(--text)]">{column.label}</span>
+                    <span className="text-[11px] font-bold rounded-full border border-[var(--border)] bg-white w-5 h-5 flex items-center justify-center" style={{ color: column.accent }}>{columnOrders.length}</span>
                   </div>
-                  <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                  <div className="flex-1 overflow-y-auto border-t border-[var(--border)] bg-[var(--surface-muted)] p-2 space-y-2">
                     {loading && columnOrders.length === 0 && <p className="text-center py-8 text-xs text-[var(--text-xmuted)]">Carregando...</p>}
                     {!loading && columnOrders.length === 0 && <p className="text-center py-8 text-xs text-[var(--text-muted)]">Vazio</p>}
                     {columnOrders.map(order => (
@@ -746,6 +747,7 @@ export default function App() {
                 </div>
               )
             })}
+            </div>
           </div>
         )}
       </div>

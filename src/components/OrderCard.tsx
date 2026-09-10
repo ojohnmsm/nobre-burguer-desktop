@@ -4,6 +4,10 @@ import { Order, OrderStatus, STATUS_LABELS, PAYMENT_LABELS, fmtMoney, timeAgo , 
 import { orderLabel } from '../orderLabel'
 import { origemDoPedido, proximaEtapa } from '../orderFlow'
 import { horaLocal, iconeVeiculo, nivelUrgencia, preparoInfo, textoEntregador } from '../orderTiming'
+import canalIfood from '../assets/canais/canal-ifood.png'
+import canal99Food from '../assets/canais/canal-99food.png'
+import canalSite from '../assets/canais/canal-site.png'
+import canalWhatsapp from '../assets/canais/canal-whatsapp.png'
 
 const STATUS_COLORS: Record<OrderStatus, string> = {
   pending:          'text-[var(--text-muted)] border-[var(--border)]',
@@ -81,10 +85,10 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
   }
 
   return (
-    <div className={`border rounded-xl overflow-hidden select-none shadow-[var(--shadow-sm)] ${urgenciaCard}`}>
+    <div className={`border ${compact ? 'rounded-lg' : 'rounded-xl'} overflow-hidden select-none shadow-[var(--shadow-sm)] ${urgenciaCard}`}>
       {/* Card header */}
       <button
-        className="w-full p-3 flex items-start gap-2 text-left hover:bg-[var(--border-light)] transition-colors"
+        className={`w-full ${compact ? 'p-2.5' : 'p-3'} flex items-start gap-2 text-left hover:bg-[var(--border-light)] transition-colors`}
         onClick={() => setOpen(v => {
           const next = !v
           if (next) onOpen?.(order.id)
@@ -96,7 +100,7 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
               (cliente, entregador, app do iFood). A idade fica ao lado, na cor
               da urgência; o valor saiu daqui e vive no cartão expandido. */}
           <div className="flex items-baseline justify-between gap-2">
-            <span className="font-mono font-bold text-xl leading-tight tracking-tight text-[var(--text)] truncate">
+            <span className={`font-mono font-bold leading-tight tracking-tight text-[var(--text)] truncate ${compact ? 'text-base' : 'text-xl'}`}>
               {orderLabel(order)}
             </span>
             <span className={`text-xs flex items-center gap-0.5 flex-shrink-0 tabular-nums ${urgenciaTexto}`}>
@@ -114,14 +118,16 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
             }`}>
               {isPickup ? 'RETIRADA' : 'ENTREGA'}
             </span>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded-sm font-bold tracking-wide border ${
-              origem.tom === 'ifood' ? 'border-red-500/50 text-red-600'
-              : origem.tom === '99food' ? 'border-amber-500/50 text-amber-700'
-              : origem.tom === 'whatsapp' ? 'border-green-500/50 text-green-700'
-              : 'border-[var(--border)] text-[var(--text-muted)]'
-            }`}>
-              {origem.label.toUpperCase()}
-            </span>
+            {compact ? <CanalCompacto canal={order.channel} /> : (
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-sm font-bold tracking-wide border ${
+                origem.tom === 'ifood' ? 'border-red-500/50 text-red-600'
+                : origem.tom === '99food' ? 'border-amber-500/50 text-amber-700'
+                : origem.tom === 'whatsapp' ? 'border-green-500/50 text-green-700'
+                : 'border-[var(--border)] text-[var(--text-muted)]'
+              }`}>
+                {origem.label.toUpperCase()}
+              </span>
+            )}
             {/* A etiqueta da loja só aparece quando o computador atende mais de
                 uma — com uma só, ela repetiria em todo cartão sem informar
                 nada. A cor vem do nome, então cada loja recebe sempre a mesma
@@ -179,6 +185,24 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
           {open ? <ChevronUp size={12} className="text-[var(--text-xmuted)]" /> : <ChevronDown size={12} className="text-[var(--text-xmuted)]" />}
         </div>
       </button>
+
+      {compact && !open && !isTerminal && proxima && (
+        <div className="flex gap-1 px-2.5 pb-2.5">
+          <button
+            onClick={() => onStatus(order.id, proxima.status)}
+            className="min-w-0 flex-1 truncate rounded-md bg-[var(--primary)] px-2 py-1.5 text-xs font-bold text-[var(--primary-fg)] transition-colors hover:bg-[var(--primary-hover)]"
+          >
+            {proxima.label}
+          </button>
+          <button
+            onClick={() => { setOpen(true); onOpen?.(order.id) }}
+            aria-label="Ver detalhes do pedido"
+            className="rounded-md border border-[var(--border)] px-2 text-[var(--text-muted)] hover:text-[var(--text)]"
+          >
+            <ChevronDown size={14} />
+          </button>
+        </div>
+      )}
 
       {/* Expanded */}
       {open && (
@@ -280,6 +304,20 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
 // estruturado do IPC criaria um objeto novo a cada leva e este memo nunca
 // bateria nada.
 export const OrderCard = memo(OrderCardImpl)
+
+const CANAIS: Record<Order['channel'], { src: string; alt: string; largura: number }> = {
+  ifood: { src: canalIfood, alt: 'iFood', largura: 28 },
+  '99food': { src: canal99Food, alt: '99Food', largura: 34 },
+  whatsapp: { src: canalWhatsapp, alt: 'WhatsApp', largura: 15 },
+  web: { src: canalSite, alt: 'Cardápio', largura: 15 },
+}
+
+function CanalCompacto({ canal }: { canal: Order['channel'] }) {
+  const item = CANAIS[canal]
+  return <span className="flex h-5 items-center rounded-sm border border-[var(--border)] bg-white px-1.5" title={item.alt}>
+    <img src={item.src} alt={item.alt} width={item.largura} className="max-h-3.5 object-contain" />
+  </span>
+}
 
 /**
  * Cor estável a partir do nome da loja.
