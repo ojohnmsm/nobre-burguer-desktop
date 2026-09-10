@@ -714,7 +714,7 @@ export default function App() {
 
         {tab === 'kanban' && configured && (
           <div className="h-full overflow-x-auto bg-[var(--bg)] p-3">
-            <div className="flex h-full min-w-max gap-3">
+            <div className="grid h-full min-w-[980px] grid-cols-5 gap-3">
             {KANBAN_COLUMNS.map(column => {
               // A coluna é uma fila: pendência no topo, depois urgência
               // (vermelho → amarelo → verde), depois o mais velho. `.filter`
@@ -723,7 +723,7 @@ export default function App() {
                 .filter(order => column.statuses.includes(order.status))
                 .sort((a, b) => compararFilaCozinha(a, b))
               return (
-                <div key={column.id} className="flex w-[220px] flex-col overflow-hidden rounded-xl border border-[var(--border)] border-t-4 bg-[var(--surface)]" style={{ borderTopColor: column.accent }}>
+                <div key={column.id} className="min-w-0 flex flex-col overflow-hidden rounded-xl border border-[var(--border)] border-t-4 bg-[var(--surface)]" style={{ borderTopColor: column.accent }}>
                   <div className="flex items-center justify-between px-3 py-2.5 flex-shrink-0">
                     <span className="font-bold text-sm text-[var(--text)]">{column.label}</span>
                     <span className="text-[11px] font-bold rounded-full border border-[var(--border)] bg-white w-5 h-5 flex items-center justify-center" style={{ color: column.accent }}>{columnOrders.length}</span>
