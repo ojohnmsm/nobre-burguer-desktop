@@ -69,6 +69,12 @@ export interface StorePauseState {
     /** Motivo de o iFood não estar recebendo (ex.: "Fora do horário"), quando há. */
     motivo: string | null
   }
+  food99?: {
+    conectada: boolean
+    /** sub_biz_status 2 (pausa temporária) ou 3 (fechada manualmente). */
+    pausada: boolean
+    subStatus: number | null
+  }
 }
 
 export type UpdateStatusResult =
@@ -147,7 +153,15 @@ declare global {
       getIfoodCancelReasons: (id: string, connectionId?: string) => Promise<{ ok: boolean; reasons?: IfoodCancelReason[]; error?: string }>
       requestIfoodCancel: (id: string, code: string, description: string, connectionId?: string) => Promise<{ ok: boolean; error?: string }>
       getStorePauseState: (connectionId?: string) => Promise<StorePauseState>
-      setStorePause: (body: { alvo: 'loja' | 'ifood'; acao: 'pausar' | 'retomar'; minutos?: number }, connectionId?: string) => Promise<{ ok: boolean; error?: string }>
+      setStorePause: (
+        body:
+          | { alvo: 'loja'; acao: 'pausar' | 'retomar' }
+          | { alvo: 'ifood'; acao: 'pausar'; minutos: number }
+          | { alvo: 'ifood'; acao: 'retomar' }
+          | { alvo: '99food'; acao: 'pausar'; pauseTime: 1 | 2 | 3 | 4 }
+          | { alvo: '99food'; acao: 'retomar' },
+        connectionId?: string
+      ) => Promise<{ ok: boolean; error?: string }>
       getIfoodDisputes: () => Promise<{ disputas: IfoodDispute[] }>
       respondIfoodDispute: (disputeId: string, resposta: 'accept' | 'reject', motivo: string | null, connectionId?: string) => Promise<{ ok: boolean; error?: string }>
       onPrintError: (callback: (error: string) => void) => () => void

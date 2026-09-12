@@ -3,15 +3,23 @@ import { Loader2, Pause, Play, Power } from 'lucide-react'
 import type { StorePauseState } from '../electron-api'
 
 /**
- * Pausar/retomar a loja pelo app da cozinha — cardápio próprio e iFood.
+ * Pausar/retomar a loja pelo app da cozinha — cardápio próprio, iFood e 99Food.
  *
  * Toda ação passa por `window.confirm` (mesmo padrão de remover uma loja em
- * Settings). O estado do iFood custa duas chamadas à API deles, então só é
- * consultado aqui, ao abrir o painel e depois de cada ação — nunca no polling
- * de 10s dos pedidos.
+ * Settings). O estado do iFood e da 99Food custam chamadas às APIs deles,
+ * então só são consultados aqui, ao abrir o painel e depois de cada ação —
+ * nunca no polling de 10s dos pedidos.
  */
 
 const OPCOES_PAUSA = [15, 30, 60, 120]
+
+/** Mesmas 4 opções da tela de Integrações: 1=10min, 2=20min, 3=30min, 4=até o fim do dia. */
+const OPCOES_PAUSA_99FOOD: { value: 1 | 2 | 3 | 4; label: string }[] = [
+  { value: 1, label: '10min' },
+  { value: 2, label: '20min' },
+  { value: 3, label: '30min' },
+  { value: 4, label: 'Fim do dia' },
+]
 
 interface Loja {
   id: string
@@ -32,7 +40,7 @@ function BlocoLoja({ loja, unica, notify }: { loja: Loja; unica: boolean; notify
   useEffect(() => { void carregar() }, [carregar])
 
   async function agir(
-    body: { alvo: 'loja' | 'ifood'; acao: 'pausar' | 'retomar'; minutos?: number },
+    body: Parameters<typeof window.api.setStorePause>[0],
     confirmacao: string,
   ) {
     if (!window.confirm(confirmacao)) return
@@ -55,6 +63,7 @@ function BlocoLoja({ loja, unica, notify }: { loja: Loja; unica: boolean; notify
     : !dentroDoHorario ? 'fechado · fora do horário'
     : 'aberto'
   const ifood = estado?.ifood
+  const food99 = estado?.food99
 
   return (
     <div className="rounded-lg border border-[var(--border)] p-3 space-y-2.5">
@@ -142,6 +151,51 @@ function BlocoLoja({ loja, unica, notify }: { loja: Loja; unica: boolean; notify
             )
           ) : (
             <p className="text-[11px] text-[var(--text-xmuted)]">iFood não conectado nesta loja.</p>
+          )}
+
+          {/* 99Food */}
+          {food99?.conectada ? (
+            food99.pausada ? (
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-[var(--primary)]">
+                  99Food: {food99.subStatus === 3 ? 'fechada manualmente' : 'pausada'}
+                </span>
+                <button
+                  disabled={ocupado}
+                  onClick={() => agir({ alvo: '99food', acao: 'retomar' }, `Retomar ${nome} na 99Food agora?`)}
+                  className="text-[11px] px-2 py-1 rounded-lg border border-[var(--border)] hover:border-[var(--success)] hover:text-[var(--success)] disabled:opacity-40 flex items-center gap-1"
+                >
+                  <Play size={11} /> Retomar
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <span className="text-xs flex items-center gap-1.5">
+                  <Power size={13} className="text-[var(--success)]" />
+                  99Food: <b>recebendo</b>
+                </span>
+                <span className="text-[11px] text-[var(--text-muted)] block">Pausar por:</span>
+                <div className="flex gap-1.5 flex-wrap">
+                  {OPCOES_PAUSA_99FOOD.map(opcao => (
+                    <button
+                      key={opcao.value}
+                      disabled={ocupado}
+                      onClick={() =>
+                        agir(
+                          { alvo: '99food', acao: 'pausar', pauseTime: opcao.value },
+                          `Pausar ${nome} na 99Food por ${opcao.label}?`,
+                        )
+                      }
+                      className="text-[11px] px-2 py-1 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:opacity-40"
+                    >
+                      {opcao.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )
+          ) : (
+            <p className="text-[11px] text-[var(--text-xmuted)]">99Food não conectada nesta loja.</p>
           )}
         </>
       )}
