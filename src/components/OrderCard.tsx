@@ -60,6 +60,11 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
   const urgencia = nivelUrgencia(order, agora)
   const driver = order.ifood_driver ?? null
   const proxima = proximaEtapa(order)
+  // Pendente de aceite — web/whatsapp sempre, e marketplace só até o aceite
+  // automático ecoar de volta (99Food agora é otimista, ver
+  // lib/opendelivery/transport.ts; iFood pode levar um ciclo de polling).
+  // Sem coluna própria pra isso: o destaque é o que avisa, dentro de "Em preparo".
+  const precisaAceite = order.status === 'pending' || order.status === 'paid' || order.status === 'awaiting_payment'
   const isPickup = order.fulfillment_type === 'pickup'
   const pickupAddress = order.pickup_address?.trim()
   const origem = origemDoPedido(order.channel)
@@ -85,7 +90,11 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
   }
 
   return (
-    <div className={`border ${compact ? 'rounded-lg' : 'rounded-xl'} overflow-hidden select-none shadow-[var(--shadow-sm)] ${urgenciaCard}`}>
+    <div className={`border ${compact ? 'rounded-lg' : 'rounded-xl'} overflow-hidden select-none shadow-[var(--shadow-sm)] ${urgenciaCard} ${
+      // Cartão aberto (clicado) ganha um contorno de outra cor — só assim dá
+      // pra achar de relance qual pedido está com o detalhe na tela.
+      open ? 'ring-2 ring-[var(--primary)]' : ''
+    }`}>
       {/* Card header */}
       <button
         className={`w-full ${compact ? 'p-2.5' : 'p-3'} flex items-start gap-2 text-left hover:bg-[var(--border-light)] transition-colors`}
@@ -118,6 +127,11 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
             }`}>
               {isPickup ? 'RETIRADA' : 'ENTREGA'}
             </span>
+            {precisaAceite && (
+              <span className="text-[10px] px-2 py-0.5 rounded-sm font-black tracking-wide bg-amber-500 text-black animate-pulse">
+                ACEITAR
+              </span>
+            )}
             {compact ? <CanalCompacto canal={order.channel} /> : (
               <span className={`text-[10px] px-1.5 py-0.5 rounded-sm font-bold tracking-wide border ${
                 origem.tom === 'ifood' ? 'border-red-500/50 text-red-600'

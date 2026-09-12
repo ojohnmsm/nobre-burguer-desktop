@@ -112,16 +112,17 @@ export const PAYMENT_LABELS: Record<string, string> = {
 }
 
 export const KANBAN_COLUMNS: { id: string; label: string; statuses: OrderStatus[]; accent: string }[] = [
-  // Uma coluna por etapa do fluxo: recebido -> em preparo -> pronto -> saiu ->
-  // concluído. "Pronto" (ready_to_pickup) tem coluna própria porque é a etapa
-  // entre confirmar e despachar — e o ciclo do iFood depende dela.
+  // Sem coluna própria pra "novo": pendente de aceite já nasce em "Em preparo"
+  // (card com destaque, ver `precisaAceite` em OrderCard) — separar numa
+  // coluna à parte fazia o pedido "sumir" da fila principal até alguém
+  // clicar nele. "Pronto" (ready_to_pickup) tem coluna própria porque é a
+  // etapa entre confirmar e despachar — e o ciclo do iFood depende dela.
   // Online pendente não chega ao PDV: o servidor só o libera após o Mercado
   // Pago aprovar. Mantemos o tipo para que pedidos antigos sigam legíveis no histórico.
-  { id: 'new',      label: 'Novos',      statuses: ['pending','paid'],          accent: '#f59e0b' },
-  { id: 'prep',     label: 'Em preparo', statuses: ['preparing'],               accent: '#3b82f6' },
-  { id: 'ready',    label: 'Pronto',     statuses: ['ready_to_pickup'],         accent: '#14b8a6' },
-  { id: 'delivery', label: 'Na entrega', statuses: ['out_for_delivery'],        accent: '#a855f7' },
-  { id: 'done',     label: 'Concluído',  statuses: ['delivered','cancelled'],   accent: '#6b7280' },
+  { id: 'prep',     label: 'Em preparo', statuses: ['pending','paid','preparing'], accent: '#3b82f6' },
+  { id: 'ready',    label: 'Pronto',     statuses: ['ready_to_pickup'],            accent: '#14b8a6' },
+  { id: 'delivery', label: 'Na entrega', statuses: ['out_for_delivery'],           accent: '#a855f7' },
+  { id: 'done',     label: 'Concluído',  statuses: ['delivered','cancelled'],      accent: '#6b7280' },
 ]
 
 export function fmtMoney(cents: number) {

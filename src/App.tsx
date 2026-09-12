@@ -714,7 +714,10 @@ export default function App() {
 
         {tab === 'kanban' && configured && (
           <div className="h-full overflow-x-auto bg-[var(--bg)] p-3">
-            <div className="grid h-full min-w-[980px] grid-cols-5 gap-3">
+            {/* "Em preparo" com o dobro do peso das outras — a coluna que
+                sumiu ("Novos") virou peso extra pra ela, não um recálculo:
+                a largura das outras três não muda em relação ao layout antigo. */}
+            <div className="grid h-full min-w-[980px] grid-cols-[2fr_1fr_1fr_1fr] gap-3">
             {KANBAN_COLUMNS.map(column => {
               // A coluna é uma fila: pendência no topo, depois urgência
               // (vermelho → amarelo → verde), depois o mais velho. `.filter`
@@ -728,9 +731,15 @@ export default function App() {
                     <span className="font-bold text-sm text-[var(--text)]">{column.label}</span>
                     <span className="text-[11px] font-bold rounded-full border border-[var(--border)] bg-white w-5 h-5 flex items-center justify-center" style={{ color: column.accent }}>{columnOrders.length}</span>
                   </div>
-                  <div className="flex-1 overflow-y-auto border-t border-[var(--border)] bg-[var(--surface-muted)] p-2 space-y-2">
-                    {loading && columnOrders.length === 0 && <p className="text-center py-8 text-xs text-[var(--text-xmuted)]">Carregando...</p>}
-                    {!loading && columnOrders.length === 0 && <p className="text-center py-8 text-xs text-[var(--text-muted)]">Vazio</p>}
+                  <div className={`flex-1 overflow-y-auto border-t border-[var(--border)] bg-[var(--surface-muted)] p-2 ${
+                    // Só "Em preparo" ganha a largura extra do dobro — dois
+                    // cards por linha, cada um do MESMO tamanho de sempre
+                    // (items-start pra não esticar um card curto até a altura
+                    // do vizinho mais alto na mesma linha).
+                    column.id === 'prep' ? 'grid grid-cols-2 gap-2 auto-rows-min items-start' : 'space-y-2'
+                  }`}>
+                    {loading && columnOrders.length === 0 && <p className="col-span-2 text-center py-8 text-xs text-[var(--text-xmuted)]">Carregando...</p>}
+                    {!loading && columnOrders.length === 0 && <p className="col-span-2 text-center py-8 text-xs text-[var(--text-muted)]">Vazio</p>}
                     {columnOrders.map(order => (
                       <OrderCard
                         key={order.id}
