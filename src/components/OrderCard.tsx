@@ -3,7 +3,7 @@ import { ChevronDown, ChevronUp, Printer, Clock, Phone, MapPin, MessageSquare } 
 import { Order, OrderStatus, STATUS_LABELS, PAYMENT_LABELS, fmtMoney, timeAgo , ehMarketplace} from '../types'
 import { orderLabel } from '../orderLabel'
 import { origemDoPedido, proximaEtapa } from '../orderFlow'
-import { horaLocal, iconeVeiculo, nivelUrgencia, preparoInfo, textoEntregador } from '../orderTiming'
+import { horaLocal, iconeVeiculo, nivelUrgencia, preparoInfo, textoEntregador, textoEntrega99Food } from '../orderTiming'
 import canalIfood from '../assets/canais/canal-ifood.png'
 import canal99Food from '../assets/canais/canal-99food.png'
 import canalSite from '../assets/canais/canal-site.png'
@@ -18,6 +18,25 @@ const STATUS_COLORS: Record<OrderStatus, string> = {
   out_for_delivery: 'text-purple-700 border-purple-300',
   delivered:        'text-[var(--text-xmuted)] border-[var(--border)]',
   cancelled:        'text-[var(--danger)] border-red-300',
+}
+
+/**
+ * Código de 4 dígitos que a 99Food usa para confirmar a entrega: ao
+ * entregador da própria 99Food (`handover_code`, delivery_type=1) ou ao
+ * cliente na retirada (`takeaway_code`, delivery_type=0). Não é o
+ * `pickup_code` legado — a doc oficial marca esse como "não será exibido ao
+ * entregador". Cópia do helper equivalente em app/admin/pedidos/page.tsx.
+ */
+function codigoEntrega99Food(order: Order): { tipo: 'entrega' | 'retirada'; codigo: string } | null {
+  if (order.channel !== '99food' || !order.external_payload) return null
+  const p = order.external_payload as { delivery_type?: unknown; handover_code?: unknown; takeaway_code?: unknown }
+  if ((p.delivery_type === 1 || p.delivery_type === '1') && typeof p.handover_code === 'string' && p.handover_code.trim()) {
+    return { tipo: 'entrega', codigo: p.handover_code.trim() }
+  }
+  if ((p.delivery_type === 0 || p.delivery_type === '0') && typeof p.takeaway_code === 'string' && p.takeaway_code.trim()) {
+    return { tipo: 'retirada', codigo: p.takeaway_code.trim() }
+  }
+  return null
 }
 
 interface Props {
@@ -82,6 +101,23 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
     : urgencia === 'fresca'    ? 'text-green-600'
     : isOld ? 'text-[var(--danger)]' : 'text-[var(--text-muted)]'
 
+  // Chip de tempo do cabeçalho compacto: MESMA cor da urgência do cartão (só
+  // reembalada em pílula) — mas o número prioriza "quanto falta pra preparar"
+  // sobre a idade, porque é isso que decide o próximo passo da cozinha.
+  const tempoDisponivel = !isTerminal && !cozinhaConcluiu && preparo.alvoISO != null
+  const chipTempoTexto = tempoDisponivel
+    ? (preparo.atrasado ? `atrasado ${Math.abs(preparo.restanteMin ?? 0)}min` : `${preparo.restanteMin}min`)
+    : (cozinhaConcluiu ? `total ${ago}` : ago)
+  const chipTempoClasse =
+    urgencia === 'atrasada'    ? 'bg-red-500/15 border border-red-400 text-[var(--danger)]'
+    : urgencia === 'aquecendo' ? 'bg-amber-500/15 border border-amber-400 text-amber-600'
+    : urgencia === 'fresca'    ? 'bg-green-500/10 border border-green-400 text-green-600'
+    : 'text-[var(--text-muted)]'
+  // 99Food: "quem entrega" + estágio/ETA ao vivo, sem rastreio de estágio pro
+  // iFood (esse já vem de `driver`) — mesmo slot visual.
+  const entrega99Food = textoEntrega99Food(order, agora)
+  const codigo99Food = codigoEntrega99Food(order)
+
   function handleCancel() {
     // Todo marketplace (iFood, 99Food) cancela com motivo, pela mesma tela —
     // não é escolha nossa, é o que o servidor aceita (ver applyOrderStatusChange).
@@ -112,9 +148,15 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
             <span className={`font-mono font-bold leading-tight tracking-tight text-[var(--text)] truncate ${compact ? 'text-base' : 'text-xl'}`}>
               {orderLabel(order)}
             </span>
-            <span className={`text-xs flex items-center gap-0.5 flex-shrink-0 tabular-nums ${urgenciaTexto}`}>
-              <Clock size={11} />{cozinhaConcluiu ? `total ${ago}` : ago}
-            </span>
+            {compact ? (
+              <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded-md flex items-center gap-1 flex-shrink-0 tabular-nums ${chipTempoClasse}`}>
+                <Clock size={11} />{chipTempoTexto}
+              </span>
+            ) : (
+              <span className={`text-xs flex items-center gap-0.5 flex-shrink-0 tabular-nums ${urgenciaTexto}`}>
+                <Clock size={11} />{cozinhaConcluiu ? `total ${ago}` : ago}
+              </span>
+            )}
           </div>
           {/* Linha 2: modalidade (fixa e forte — muda o que a cozinha faz),
               canal em tom discreto, etiqueta da loja quando há mais de uma, e o
@@ -161,38 +203,48 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
             )}
           </div>
           <p className="font-semibold text-sm text-[var(--text)] truncate mt-1">{order.customer_name}</p>
-          <p className="text-xs text-[var(--text-muted)] mt-0.5">
-            {!compact && <>{order.order_items.length} {order.order_items.length === 1 ? 'item' : 'itens'}</>}
-            {/* Pedido do iFood é sempre "pago no iFood" — a linha de pagamento
-                só polui o card. */}
-            {!doMarketplace && <>{!compact && ' · '}{PAYMENT_LABELS[order.payment_method] || order.payment_method}{order.card_on_delivery && ' (na entrega)'}</>}
-          </p>
-          {!isTerminal && preparo.alvoISO && (
-            <p className={`text-xs mt-0.5 flex items-center gap-1 ${
-              preparo.atrasado ? 'text-[var(--danger)] font-bold'
-              : (preparo.restanteMin ?? 99) <= 10 ? 'text-[var(--primary)]'
-              : 'text-[var(--text-muted)]'
-            }`}>
-              <Clock size={10} className="flex-shrink-0" />
-              Preparar até {horaLocal(preparo.alvoISO)} · {preparo.atrasado
-                ? `atrasado ${Math.abs(preparo.restanteMin ?? 0)}min`
-                : `faltam ${preparo.restanteMin}min`}
-            </p>
-          )}
-          {driver && (
-            <p className={`text-xs mt-0.5 flex items-center gap-1 ${
-              driver.estagio === 'na_loja' || (driver.pickupEtaMin != null && driver.pickupEtaMin <= 5)
-                ? 'text-[var(--primary)] font-bold' : 'text-[var(--text-muted)]'
-            }`}>
-              <span>{iconeVeiculo(driver.veiculo)}</span>
-              <span className="truncate">{textoEntregador(driver)}</span>
-            </p>
-          )}
-          {order.notes && (
-            <p className="text-xs text-[var(--primary)] mt-0.5 flex items-center gap-1 truncate">
-              <MessageSquare size={10} className="flex-shrink-0" />
-              {order.notes.slice(0, 45)}{order.notes.length > 45 ? '…' : ''}
-            </p>
+          {!compact && (
+            <>
+              <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                {order.order_items.length} {order.order_items.length === 1 ? 'item' : 'itens'}
+                {/* Pedido de marketplace é sempre "pago no app" — a linha de
+                    pagamento só polui o card. */}
+                {!doMarketplace && <> · {PAYMENT_LABELS[order.payment_method] || order.payment_method}{order.card_on_delivery && ' (na entrega)'}</>}
+              </p>
+              {!isTerminal && preparo.alvoISO && (
+                <p className={`text-xs mt-0.5 flex items-center gap-1 ${
+                  preparo.atrasado ? 'text-[var(--danger)] font-bold'
+                  : (preparo.restanteMin ?? 99) <= 10 ? 'text-[var(--primary)]'
+                  : 'text-[var(--text-muted)]'
+                }`}>
+                  <Clock size={10} className="flex-shrink-0" />
+                  Preparar até {horaLocal(preparo.alvoISO)} · {preparo.atrasado
+                    ? `atrasado ${Math.abs(preparo.restanteMin ?? 0)}min`
+                    : `faltam ${preparo.restanteMin}min`}
+                </p>
+              )}
+              {driver && (
+                <p className={`text-xs mt-0.5 flex items-center gap-1 ${
+                  driver.estagio === 'na_loja' || (driver.pickupEtaMin != null && driver.pickupEtaMin <= 5)
+                    ? 'text-[var(--primary)] font-bold' : 'text-[var(--text-muted)]'
+                }`}>
+                  <span>{iconeVeiculo(driver.veiculo)}</span>
+                  <span className="truncate">{textoEntregador(driver)}</span>
+                </p>
+              )}
+              {entrega99Food && (
+                <p className="text-xs mt-0.5 flex items-center gap-1 text-[var(--text-muted)] truncate">
+                  <span>🛵</span>
+                  <span className="truncate">{entrega99Food}</span>
+                </p>
+              )}
+              {order.notes && (
+                <p className="text-xs text-[var(--primary)] mt-0.5 flex items-center gap-1 truncate">
+                  <MessageSquare size={10} className="flex-shrink-0" />
+                  {order.notes.slice(0, 45)}{order.notes.length > 45 ? '…' : ''}
+                </p>
+              )}
+            </>
           )}
         </div>
         <div className="flex flex-col items-end flex-shrink-0 pt-1">
@@ -221,6 +273,43 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
       {/* Expanded */}
       {open && (
         <div className="border-t border-[var(--border)] p-3 space-y-3 text-sm">
+          {/* Recap do compacto: pagamento, preparo detalhado e entregador não
+              aparecem no card fechado em modo compacto — não sumiram, só
+              ficaram a um clique. */}
+          {compact && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pb-2 border-b border-[var(--border)] text-xs">
+              {!doMarketplace && (
+                <span className="text-[var(--text-muted)]">{PAYMENT_LABELS[order.payment_method] || order.payment_method}{order.card_on_delivery && ' (na entrega)'}</span>
+              )}
+              {!isTerminal && preparo.alvoISO && (
+                <span className={`flex items-center gap-1 ${
+                  preparo.atrasado ? 'text-[var(--danger)] font-bold'
+                  : (preparo.restanteMin ?? 99) <= 10 ? 'text-[var(--primary)]'
+                  : 'text-[var(--text-muted)]'
+                }`}>
+                  <Clock size={10} className="flex-shrink-0" />
+                  Preparar até {horaLocal(preparo.alvoISO)} · {preparo.atrasado
+                    ? `atrasado ${Math.abs(preparo.restanteMin ?? 0)}min`
+                    : `faltam ${preparo.restanteMin}min`}
+                </span>
+              )}
+              {driver && (
+                <span className={`flex items-center gap-1 ${
+                  driver.estagio === 'na_loja' || (driver.pickupEtaMin != null && driver.pickupEtaMin <= 5)
+                    ? 'text-[var(--primary)] font-bold' : 'text-[var(--text-muted)]'
+                }`}>
+                  <span>{iconeVeiculo(driver.veiculo)}</span>
+                  <span>{textoEntregador(driver)}</span>
+                </span>
+              )}
+              {entrega99Food && (
+                <span className="flex items-center gap-1 text-[var(--text-muted)]">
+                  <span>🛵</span>
+                  <span>{entrega99Food}</span>
+                </span>
+              )}
+            </div>
+          )}
           {/* Items */}
           <div className="space-y-1">
             {order.order_items.map(item => (
@@ -265,6 +354,12 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
               <p className="text-[var(--text)]">
                 <span className="font-bold">Código de coleta:</span>{' '}
                 <span className="font-mono text-[var(--primary)]">{order.ifood_pickup_code}</span>
+              </p>
+            )}
+            {codigo99Food && (
+              <p className="text-[var(--text)]">
+                <span className="font-bold">{codigo99Food.tipo === 'retirada' ? 'Código de retirada:' : 'Código de entrega:'}</span>{' '}
+                <span className="font-mono text-[var(--primary)]">{codigo99Food.codigo}</span>
               </p>
             )}
           </div>

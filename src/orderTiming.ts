@@ -5,11 +5,12 @@ import { ehMarketplace } from './types'
  * projeto duplica utilitário puro entre web e desktop).
  *
  * iFood: alvo = `external_payload.delivery.deliveryDateTime` (o iFood define).
+ * 99Food: alvo = `external_payload.expected_cook_eta` — timestamp Unix EM
+ *   SEGUNDOS do instante-alvo (confirmado contra pedidos reais — não é uma
+ *   duração a somar em `created_at`, apesar do "Unit: second" da doc sugerir
+ *   isso à primeira leitura). Cai para a meta genérica da loja se vier
+ *   ausente/zerado (fica zerado até a loja confirmar o pedido).
  * Pedido próprio: `created_at + prepTargetMinutes` (0 = sem contagem).
- * 99Food: sem alvo aqui — o payload do Open Delivery não foi mapeado para um
- * horário prometido equivalente; melhor ficar sem contagem (cartão neutro, o
- * mesmo caminho de "iFood sem data no payload") do que aplicar por engano o
- * prepTargetMinutes da loja a um pedido cujo prazo é o marketplace que define.
  * Terminal: congela; devolve o tempo total.
  */
 
@@ -34,6 +35,22 @@ function ifoodDeliveryDateTime(payload: Record<string, unknown> | null | undefin
   const delivery = (payload as { delivery?: { deliveryDateTime?: unknown } }).delivery
   const dt = delivery?.deliveryDateTime
   return typeof dt === 'string' && !Number.isNaN(Date.parse(dt)) ? dt : null
+}
+
+function numeroPositivo(valor: unknown): number | null {
+  const numero = typeof valor === 'number' ? valor : typeof valor === 'string' ? Number(valor) : Number.NaN
+  return Number.isFinite(numero) && numero > 0 ? numero : null
+}
+
+/**
+ * `expected_cook_eta`/`expected_arrived_eta` da 99Food: timestamp Unix EM
+ * SEGUNDOS do instante-alvo — não uma duração a somar em `created_at`. Fica
+ * em 0 até a loja confirmar o pedido, então <= 0 é "sem alvo ainda".
+ */
+function timestampAlvo99Food(payload: Record<string, unknown> | null | undefined, campo: 'expected_cook_eta' | 'expected_arrived_eta'): number | null {
+  if (!payload || typeof payload !== 'object') return null
+  const segundos = numeroPositivo((payload as Record<string, unknown>)[campo])
+  return segundos != null ? segundos * 1000 : null
 }
 
 export function preparoInfo(
@@ -62,7 +79,14 @@ export function preparoInfo(
   let alvoISO: string | null = null
   if (order.channel === 'ifood') {
     alvoISO = ifoodDeliveryDateTime(order.external_payload)
-  } else if (!ehMarketplace(order.channel) && prepTargetMinutes > 0) {
+  } else if (order.channel === '99food') {
+    const alvoMs99 = timestampAlvo99Food(order.external_payload, 'expected_cook_eta')
+    if (alvoMs99 != null) {
+      alvoISO = new Date(alvoMs99).toISOString()
+    } else if (prepTargetMinutes > 0) {
+      alvoISO = new Date(new Date(order.created_at).getTime() + prepTargetMinutes * 60000).toISOString()
+    }
+  } else if (prepTargetMinutes > 0) {
     alvoISO = new Date(new Date(order.created_at).getTime() + prepTargetMinutes * 60000).toISOString()
   }
 
@@ -116,16 +140,19 @@ export function nivelUrgencia(order: UrgenciaOrder, agora: number = Date.now()):
   if (order.channel === 'ifood') {
     const iso = ifoodDeliveryDateTime(order.external_payload)
     alvoMs = iso ? new Date(iso).getTime() : null
-  } else if (!ehMarketplace(order.channel)) {
-    const confirmar = Math.max(0, order.confirm_target_minutes ?? 0)
-    const preparar = Math.max(0, order.prep_target_minutes ?? 0)
-    const aguardar = Math.max(0, order.ready_target_minutes ?? 0)
-    // Soma cumulativa até a etapa atual.
-    const janelaMin =
-      order.status === 'ready_to_pickup' ? confirmar + preparar + aguardar
-      : order.status === 'preparing'     ? confirmar + preparar
-      : confirmar // pending / awaiting_payment / paid
-    if (janelaMin > 0) alvoMs = criadoMs + janelaMin * 60000
+  } else {
+    if (order.channel === '99food') alvoMs = timestampAlvo99Food(order.external_payload, 'expected_cook_eta')
+    if (alvoMs == null) {
+      const confirmar = Math.max(0, order.confirm_target_minutes ?? 0)
+      const preparar = Math.max(0, order.prep_target_minutes ?? 0)
+      const aguardar = Math.max(0, order.ready_target_minutes ?? 0)
+      // Soma cumulativa até a etapa atual.
+      const janelaMin =
+        order.status === 'ready_to_pickup' ? confirmar + preparar + aguardar
+        : order.status === 'preparing'     ? confirmar + preparar
+        : confirmar // pending / awaiting_payment / paid
+      if (janelaMin > 0) alvoMs = criadoMs + janelaMin * 60000
+    }
   }
 
   if (alvoMs == null) return null
@@ -196,6 +223,61 @@ export function textoEntregador(d: { estagio: 'a_caminho' | 'na_loja' | 'coletou
   if (d.estagio === 'coletou') return 'Entregador saiu com o pedido'
   if (d.pickupEtaMin != null) return `Entregador chega em ${d.pickupEtaMin} min`
   return 'Entregador a caminho'
+}
+
+/**
+ * Estágios do webhook `deliveryStatus` da 99Food (doc "Logistics Webhooks").
+ * Nomenclatura deles: B = loja (origem), C = cliente (destino) — por isso
+ * `rider_to_B_ETA` é o ETA até a LOJA, não até o cliente.
+ */
+const ESTAGIO_ENTREGA_99FOOD: Record<number, string> = {
+  120: 'a caminho da loja',
+  130: 'na loja',
+  140: 'saiu com o pedido',
+  150: 'chegou ao cliente',
+  160: 'entregue',
+  170: 'entrega cancelada',
+  180: 'reatribuído a outro entregador',
+  190: 'entrega abortada',
+}
+
+/**
+ * "Quem entrega" um pedido 99Food, a partir de `delivery_type`
+ * (0=retirada pelo cliente, 1=entregador da 99Food, 2=entregador da loja) e,
+ * só quando é a 99Food quem entrega, o nome + estágio ao vivo do entregador
+ * (`_entrega_ao_vivo_99food`, gravado pelo servidor a partir do webhook
+ * `deliveryStatus` — ver lib/opendelivery/transport.ts no app web).
+ */
+export function textoEntrega99Food(order: TimingOrder, agora: number = Date.now()): string | null {
+  if (order.channel !== '99food') return null
+  if (order.status === 'delivered' || order.status === 'cancelled') return null
+  const payload = order.external_payload
+  if (!payload || typeof payload !== 'object') return null
+  const deliveryType = (payload as { delivery_type?: unknown }).delivery_type
+
+  if (deliveryType === 0 || deliveryType === '0') return 'Retirada pelo cliente'
+  if (deliveryType === 2 || deliveryType === '2') return 'Entrega pela loja'
+  if (deliveryType !== 1 && deliveryType !== '1') return null
+
+  const aoVivo = (payload as { _entrega_ao_vivo_99food?: unknown })._entrega_ao_vivo_99food
+  const dados = aoVivo && typeof aoVivo === 'object' ? aoVivo as Record<string, unknown> : null
+  const nome = dados && typeof dados.riderName === 'string' && dados.riderName.trim() ? dados.riderName.trim() : null
+  const quem = nome ? `Entregador ${nome}` : 'Entregador da 99Food'
+  const estagio = dados ? numeroPositivo(dados.deliveryStatus) : null
+
+  if (estagio != null && estagio !== 120) {
+    return `${quem} · ${ESTAGIO_ENTREGA_99FOOD[estagio] ?? 'a caminho'}`
+  }
+
+  const etaVivoSeg = estagio === 120 ? numeroPositivo(dados?.riderToBEtaEpochSec) : null
+  const etaInicialSeg = numeroPositivo((payload as { expected_arrived_eta?: unknown }).expected_arrived_eta)
+  const segundosEta = etaVivoSeg ?? etaInicialSeg
+  const etaMin = segundosEta != null ? Math.round((segundosEta * 1000 - agora) / 60000) : null
+
+  if (etaMin != null && etaMin > 0) {
+    return estagio === 120 ? `${quem} · chega na loja em ${etaMin} min` : `${quem} · chega em ${etaMin} min`
+  }
+  return estagio === 120 ? `${quem} a caminho da loja` : `${quem} a caminho`
 }
 
 export function horaLocal(iso: string): string {
