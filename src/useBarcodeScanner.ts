@@ -3,10 +3,7 @@ import { proximaEtapa } from './orderFlow'
 import { orderLabel } from './orderLabel'
 import { STATUS_LABELS, type Order } from './types'
 import type { ScanReadyResult } from './electron-api'
-
-/** Mesmo prefixo de electron/escpos.ts — mudar um lado sem o outro quebra a leitura. */
-const QR_ORDER_PREFIX = 'PEDIDO:'
-const QR_TEST_CODE = `${QR_ORDER_PREFIX}TESTE`
+import { extractOrderQrPayload, QR_ORDER_MARKER } from './barcodePayload'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -76,16 +73,17 @@ export function useBarcodeScanner({ ordersRef, markReady, notify, enabled }: Use
     if (!enabled) return
 
     async function processarScan(codigo: string) {
-      if (codigo === QR_TEST_CODE) {
-        notify('✅ Leitor de QR Code funcionando')
-        return
-      }
-      if (!codigo.startsWith(QR_ORDER_PREFIX)) {
+      const payload = extractOrderQrPayload(codigo)
+      if (payload === null) {
         if (codigo.length >= 8) notify('Código lido, mas não é uma comanda do Cardapia')
         return
       }
+      if (payload === 'TESTE') {
+        notify('✅ Leitor de QR Code funcionando')
+        return
+      }
 
-      const id = codigo.slice(QR_ORDER_PREFIX.length)
+      const id = payload
       if (!UUID_PATTERN.test(id)) {
         notify('QR Code da comanda inválido')
         return
@@ -157,9 +155,9 @@ export function useBarcodeScanner({ ordersRef, markReady, notify, enabled }: Use
       const candidatoPrefixo = bufferRef.current + event.key
       if (
         bufferRef.current.length > 0
-        && bufferRef.current.length < QR_ORDER_PREFIX.length
-        && !QR_ORDER_PREFIX.startsWith(candidatoPrefixo)
-        && event.key === QR_ORDER_PREFIX[0]
+        && bufferRef.current.length < QR_ORDER_MARKER.length
+        && !QR_ORDER_MARKER.startsWith(candidatoPrefixo)
+        && event.key === QR_ORDER_MARKER[0]
       ) {
         // Um scan começou colado à última tecla humana. Mantém o que já estava
         // no campo e reinicia exatamente no "P" do prefixo da comanda.

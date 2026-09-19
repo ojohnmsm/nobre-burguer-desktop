@@ -4,6 +4,7 @@ import { join } from 'path'
 import { execFile, spawn } from 'child_process'
 import { randomUUID } from 'crypto'
 import QRCode from 'qrcode'
+import { formatOrderQrPayload } from '../src/barcodePayload'
 import { orderLabel, origemLabel } from './receiptFormat'
 import { registrar } from './log'
 
@@ -292,7 +293,7 @@ export function buildReceiptLines(order: ReceiptOrder, width: 32 | 48 = 32): Rec
   // procurar o card no kanban (ver useBarcodeScanner.ts no renderer). Por
   // último, perto do corte — fácil de escanear sem desdobrar a comanda
   // toda. `qr: true` faz os dois caminhos de impressão desenharem o mesmo QR.
-  out.push(ln(`PEDIDO:${String(order.id)}`, { center: true, bold: true, qr: true }))
+  out.push(ln(formatOrderQrPayload(String(order.id)), { center: true, bold: true, qr: true }))
 
   return out
 }
