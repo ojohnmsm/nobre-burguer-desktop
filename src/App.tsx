@@ -42,6 +42,7 @@ export default function App() {
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [autoPrint, setAutoPrint] = useState(true)
+  const [scannerReady, setScannerReady] = useState(false)
   const [notifications, setNotifications] = useState<string[]>([])
   const [configured, setConfigured] = useState(false)
 
@@ -200,6 +201,7 @@ export default function App() {
     const ready = config.connections.length > 0
     setConfigured(ready)
     setAutoPrint(config.autoPrint !== 'false')
+    setScannerReady(config.scannerReady === 'true')
 
     // Os nomes das lojas vêm junto: sem servidor configurado não há a quem
     // perguntar, e com ele configurado a resposta muda se o código for trocado.
@@ -442,7 +444,12 @@ export default function App() {
   // Leitor de código de barras/QR do balcão: escanear a comanda impressa
   // marca o pedido como pronto sem procurar o card no kanban — ver
   // useBarcodeScanner.ts para a heurística de rajada de teclado.
-  useBarcodeScanner({ ordersRef, markReady: markReadyByScan, notify: addNotification, enabled: configured })
+  useBarcodeScanner({
+    ordersRef,
+    markReady: markReadyByScan,
+    notify: addNotification,
+    enabled: configured && scannerReady,
+  })
 
   const [cancelandoIfood, setCancelandoIfood] = useState<Order | null>(null)
   const [pausePanelOpen, setPausePanelOpen] = useState(false)

@@ -4,7 +4,7 @@ contextBridge.exposeInMainWorld('api', {
   getConfig:         ()                                => ipcRenderer.invoke('get-config'),
   saveConfig:        (cfg: unknown)                   => ipcRenderer.invoke('save-config', cfg),
   getPrinters:       ()                                => ipcRenderer.invoke('get-printers'),
-  printOrder:        (order: unknown)                  => ipcRenderer.invoke('print-order', order),
+  printOrder:        (order: unknown, includeReadyQr?: boolean) => ipcRenderer.invoke('print-order', order, includeReadyQr),
   fetchOrders:       ()                                => ipcRenderer.invoke('fetch-orders'),
   fetchOrderHistory: (opts: unknown)                   => ipcRenderer.invoke('fetch-order-history', opts),
   updateOrderStatus: (id: string, status: string, connectionId?: string) => ipcRenderer.invoke('update-order-status', id, status, connectionId),

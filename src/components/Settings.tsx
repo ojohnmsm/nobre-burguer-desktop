@@ -16,12 +16,13 @@ const EMPTY_CONFIG: DesktopConfig = {
   autoPrint: 'true',
   autoPrintChannels: 'all',
   printCopies: '1',
+  scannerReady: 'false',
   autoStart: 'true',
 }
 
 /** Pedido de mentira só para conferir a saída da impressora. */
 const PEDIDO_TESTE = {
-  // O scanner reconhece PEDIDO:TESTE como diagnóstico, sem chamar a API nem
+  // O scanner reconhece PEDIDOTESTE como diagnóstico, sem chamar a API nem
   // alterar pedido real.
   id: 'TESTE',
   channel: 'web',
@@ -119,6 +120,7 @@ export function Settings({ onSaved }: Props) {
       autoPrint: config.autoPrint,
       autoPrintChannels: config.autoPrintChannels,
       printCopies: config.printCopies,
+      scannerReady: config.scannerReady,
       autoStart: config.autoStart,
     }
 
@@ -134,13 +136,13 @@ export function Settings({ onSaved }: Props) {
   async function testarImpressao() {
     // Salva a largura escolhida antes, senão o teste sai com a anterior.
     await window.api.saveConfig({ printerName: config.printerName, printerWidth: config.printerWidth })
-    const resultado = await window.api.printOrder(PEDIDO_TESTE as never)
+    const resultado = await window.api.printOrder(PEDIDO_TESTE as never, config.scannerReady === 'true')
     if (resultado === 'no-printer') setError('Selecione uma impressora primeiro.')
     else if (resultado === 'error') setError('Não foi possível imprimir o teste.')
     else setError('')
   }
 
-  const toggle = (key: 'autoPrint' | 'autoStart', label: string, description: string) => (
+  const toggle = (key: 'autoPrint' | 'scannerReady' | 'autoStart', label: string, description: string) => (
     <div className="flex items-center justify-between gap-4">
       <div>
         <p className="text-sm text-[var(--text)] font-medium">{label}</p>
@@ -332,6 +334,11 @@ export function Settings({ onSaved }: Props) {
           </select>
         </div>
         {toggle('autoPrint', 'Impressão automática', 'Imprime a comanda quando o polling encontrar um novo pedido.')}
+        {toggle(
+          'scannerReady',
+          'Marcar pedido como pronto pelo QR',
+          'Imprime o QR na comanda e ativa a leitura pelo scanner neste computador.'
+        )}
         {config.autoPrint === 'true' && (
           <div>
             <label className="block text-xs text-[var(--text-muted)] mb-1 font-medium" htmlFor="autoprint-channels">Imprimir automaticamente</label>
@@ -374,10 +381,12 @@ export function Settings({ onSaved }: Props) {
           disabled={!config.printerName}
           className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] text-[var(--text-muted)] transition-colors disabled:opacity-40"
         >
-          <Printer size={12} /> Testar impressão e QR
+          <Printer size={12} /> {config.scannerReady === 'true' ? 'Testar impressão e QR' : 'Testar impressão'}
         </button>
         <p className="text-[11px] text-[var(--text-xmuted)]">
-          Depois de imprimir, deixe o Cardapia em primeiro plano e leia o QR da comanda de teste. O aplicativo confirmará na tela sem alterar nenhum pedido.
+          {config.scannerReady === 'true'
+            ? 'Depois de imprimir, salve as configurações, deixe o Cardapia em primeiro plano e leia o QR da comanda de teste. O aplicativo confirmará na tela sem alterar nenhum pedido.'
+            : 'Ative a opção acima para incluir e testar o QR da comanda.'}
         </p>
       </section>
 

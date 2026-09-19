@@ -12,6 +12,8 @@ export interface DesktopConfig {
   autoPrintChannels: string
   /** Vias impressas por pedido novo: '1' a '3'. */
   printCopies: string
+  /** 'true' ativa impressão e leitura do QR para marcar pedido pronto. */
+  scannerReady: string
   autoStart: string
 }
 
@@ -27,6 +29,7 @@ export interface DesktopConfigInput {
   autoPrint?: string
   autoPrintChannels?: string
   printCopies?: string
+  scannerReady?: string
   autoStart?: string
 }
 
@@ -156,7 +159,7 @@ declare global {
       getConfig: () => Promise<DesktopConfig>
       saveConfig: (config: DesktopConfigInput) => Promise<boolean>
       getPrinters: () => Promise<PrinterInfo[]>
-      printOrder: (order: Order) => Promise<'ok' | 'no-printer' | 'error'>
+      printOrder: (order: Order, includeReadyQr?: boolean) => Promise<'ok' | 'no-printer' | 'error'>
       fetchOrders: () => Promise<Order[]>
       /** offsetsPorConexao: quantas linhas DE CADA loja já apareceram — não um offset só compartilhado (ver fetch-order-history em main.ts). */
       fetchOrderHistory: (opts: { limit: number; offsetsPorConexao?: Record<string, number>; status?: OrderStatus | '' }) => Promise<{ orders: Order[]; hasMore: boolean }>

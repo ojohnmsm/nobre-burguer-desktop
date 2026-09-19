@@ -268,6 +268,8 @@ interface DesktopConfigInput {
   autoPrintChannels?: string
   /** Quantas comandas sair por pedido: '1' a '3'. */
   printCopies?: string
+  /** 'true' ativa impressão e leitura do QR para marcar pedido pronto. */
+  scannerReady?: string
   autoStart?: string
 }
 
@@ -290,6 +292,7 @@ function getConfigView() {
     autoPrint: config.autoPrint || 'true',
     autoPrintChannels: config.autoPrintChannels || 'all',
     printCopies: config.printCopies || '1',
+    scannerReady: config.scannerReady === 'true' ? 'true' : 'false',
     autoStart: config.autoStart || 'true',
   }
 }
@@ -310,6 +313,7 @@ function saveConfigInput(input: DesktopConfigInput) {
     autoPrint: input.autoPrint ?? current.autoPrint ?? 'true',
     autoPrintChannels: input.autoPrintChannels ?? current.autoPrintChannels ?? 'all',
     printCopies: normalizarVias(input.printCopies ?? current.printCopies),
+    scannerReady: (input.scannerReady ?? current.scannerReady) === 'true' ? 'true' : 'false',
     autoStart: input.autoStart ?? current.autoStart ?? 'true',
   }
   saveConfig(next)
@@ -442,12 +446,17 @@ async function desktopRequest<T>(
 
 
 // ── FALLBACK: Chromium webContents.print (HTML) ───────────────────────────
-function chromiumPrint(order: Record<string, unknown>, printerName: string, widthCols: 32 | 48): Promise<void> {
+function chromiumPrint(
+  order: Record<string, unknown>,
+  printerName: string,
+  widthCols: 32 | 48,
+  includeReadyQr: boolean
+): Promise<void> {
   return new Promise((resolve, reject) => {
     if (printWindow) { printWindow.destroy(); printWindow = null }
 
     const tmpFile = join(app.getPath('temp'), `nobre-receipt-${randomUUID()}.html`)
-    writeFileSync(tmpFile, buildReceiptHtml(order, widthCols), 'utf-8')
+    writeFileSync(tmpFile, buildReceiptHtml(order, widthCols, includeReadyQr), 'utf-8')
 
     printWindow = new BrowserWindow({
       show: false,
@@ -566,13 +575,14 @@ async function autoPrintOrder(
   order: Record<string, unknown>,
   printerName: string,
   widthCols: 32 | 48,
-  vias = 1
+  vias = 1,
+  includeReadyQr = false
 ) {
   const pedido = `#${orderLabel(order as never)}`
 
   for (let i = 0; i < vias; i += 1) {
     try {
-      await printRawEscPos(buildReceiptEscPos(order, widthCols), printerName)
+      await printRawEscPos(buildReceiptEscPos(order, widthCols, includeReadyQr), printerName)
       ultimoCaminhoReportado = ultimoCaminhoDeImpressao() ?? ultimoCaminhoReportado
     } catch (escposError) {
       // Dúvida NÃO vira reimpressão. Era isto que dobrava a comanda: o ESC/POS
@@ -594,7 +604,7 @@ async function autoPrintOrder(
       // O motivo técnico não ajuda quem está montando pedido; vai para o log.
       registrar('erro', `ESC/POS falhou no pedido ${pedido}, usando a reserva em HTML`, escposError)
       try {
-        await chromiumPrint(order, printerName, widthCols)
+        await chromiumPrint(order, printerName, widthCols, includeReadyQr)
         registrar('info', `Reserva em HTML imprimiu o pedido ${pedido}`)
         ultimoCaminhoReportado = 'html_fallback'
       } catch (htmlError) {
@@ -651,14 +661,20 @@ ipcMain.handle('get-printers', async () => {
   return list
 })
 
-ipcMain.handle('print-order', async (_e, order: Record<string, unknown>) => {
+ipcMain.handle('print-order', async (_e, order: Record<string, unknown>, includeReadyQr?: boolean) => {
   const cfg = loadConfig()
   if (!cfg.printerName) return 'no-printer'
   const widthCols = cfg.printerWidth === '80' ? 48 : 32
   try {
     // Reimpressão pedida no cartão sai com UMA via de propósito: quem clica
     // quer a comanda que faltou, não outro par delas.
-    await autoPrintOrder(order, cfg.printerName, widthCols)
+    await autoPrintOrder(
+      order,
+      cfg.printerName,
+      widthCols,
+      1,
+      includeReadyQr ?? cfg.scannerReady === 'true'
+    )
     return 'ok'
   } catch (error) {
     // autoPrintOrder já trata (e avisa) as falhas de impressão que conhece; o
@@ -923,6 +939,7 @@ async function vigiarPedidosNovos() {
   const canais = cfg.autoPrintChannels || 'all'
   const widthCols = cfg.printerWidth === '80' ? 48 : 32
   const vias = Number(normalizarVias(cfg.printCopies))
+  const includeReadyQr = cfg.scannerReady === 'true'
 
   for (const p of novos) {
     // Um pedido que só "apareceu" na lista mas é de horas atrás não é novo.
@@ -954,7 +971,7 @@ async function vigiarPedidosNovos() {
     // Impressão — o processo principal é o dono; o renderer não imprime mais.
     if (autoPrint && cfg.printerName && deveImprimirCanal(canal, canais)) {
       try {
-        await autoPrintOrder(p, cfg.printerName, widthCols, vias)
+        await autoPrintOrder(p, cfg.printerName, widthCols, vias, includeReadyQr)
       } catch (err) {
         console.error('Falha ao imprimir pedido novo (vigia principal):', err)
       }

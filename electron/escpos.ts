@@ -172,7 +172,11 @@ interface IfoodPayload {
   total?: { orderAmount?: number; benefits?: number }
 }
 
-export function buildReceiptLines(order: ReceiptOrder, width: 32 | 48 = 32): ReceiptLine[] {
+export function buildReceiptLines(
+  order: ReceiptOrder,
+  width: 32 | 48 = 32,
+  includeReadyQr = false
+): ReceiptLine[] {
   const { ctr, row, wrap, div, dbl } = layout(width)
   const R = (cents: number) => 'R$' + (Number(cents) / 100).toFixed(2).replace('.', ',')
   /** Reais decimais (o iFood manda assim no total), não centavos. */
@@ -293,15 +297,21 @@ export function buildReceiptLines(order: ReceiptOrder, width: 32 | 48 = 32): Rec
   // procurar o card no kanban (ver useBarcodeScanner.ts no renderer). Por
   // último, perto do corte — fácil de escanear sem desdobrar a comanda
   // toda. `qr: true` faz os dois caminhos de impressão desenharem o mesmo QR.
-  out.push(ln(formatOrderQrPayload(String(order.id)), { center: true, bold: true, qr: true }))
+  if (includeReadyQr) {
+    out.push(ln(formatOrderQrPayload(String(order.id)), { center: true, bold: true, qr: true }))
+  }
 
   return out
 }
 
 /** Desenha as linhas como bytes ESC/POS — o caminho primario. */
-export function buildReceiptEscPos(order: ReceiptOrder, width: 32 | 48 = 32): Buffer {
+export function buildReceiptEscPos(
+  order: ReceiptOrder,
+  width: 32 | 48 = 32,
+  includeReadyQr = false
+): Buffer {
   const partes: Buffer[] = [CMD.init]
-  for (const l of buildReceiptLines(order, width)) {
+  for (const l of buildReceiptLines(order, width, includeReadyQr)) {
     if (l.qr) {
       // Feed em branco nos dois lados — zona de silêncio que leitores baratos
       // exigem pra decodificar de forma confiável.
@@ -324,13 +334,17 @@ export function buildReceiptEscPos(order: ReceiptOrder, width: 32 | 48 = 32): Bu
  * sairia pelo ESC/POS. Cupom diferente confunde quem monta o pedido, e a
  * cozinha nao tem por que saber qual caminho de impressao funcionou hoje.
  */
-export function buildReceiptHtml(order: Record<string, unknown>, widthCols: 32 | 48): string {
+export function buildReceiptHtml(
+  order: Record<string, unknown>,
+  widthCols: 32 | 48,
+  includeReadyQr = false
+): string {
   const h = (s: unknown) => String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
   const pageWidthMm = widthCols === 48 ? 80 : 58
 
-  const linhas = buildReceiptLines(order, widthCols)
+  const linhas = buildReceiptLines(order, widthCols, includeReadyQr)
     .map((l) => {
       if (l.qr) {
         return `<span class="qr">${qrCodeSvg(l.text)}<span>${h(l.text)}</span></span>`
