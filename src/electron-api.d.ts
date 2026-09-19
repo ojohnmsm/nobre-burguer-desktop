@@ -81,6 +81,18 @@ export type UpdateStatusResult =
   | { ok: true; requested: boolean; message: string | null }
   | { ok: false; error: string }
 
+export type ScanReadyResult =
+  | {
+      ok: true
+      success: true
+      requested: boolean
+      label: string
+      channel: string
+      message: string | null
+      connectionId: string
+    }
+  | { ok: false; error: string }
+
 export interface PrinterInfo {
   name: string
   displayName: string
@@ -149,6 +161,7 @@ declare global {
       /** offsetsPorConexao: quantas linhas DE CADA loja já apareceram — não um offset só compartilhado (ver fetch-order-history em main.ts). */
       fetchOrderHistory: (opts: { limit: number; offsetsPorConexao?: Record<string, number>; status?: OrderStatus | '' }) => Promise<{ orders: Order[]; hasMore: boolean }>
       updateOrderStatus: (id: string, status: OrderStatus, connectionId?: string) => Promise<UpdateStatusResult>
+      scanOrderReady: (id: string, connectionId?: string) => Promise<ScanReadyResult>
       acknowledgeOrder: (id: string, connectionId?: string) => Promise<boolean>
       getIfoodCancelReasons: (id: string, connectionId?: string) => Promise<{ ok: boolean; reasons?: IfoodCancelReason[]; error?: string }>
       requestIfoodCancel: (id: string, code: string, description: string, connectionId?: string) => Promise<{ ok: boolean; error?: string }>

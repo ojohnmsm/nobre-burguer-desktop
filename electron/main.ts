@@ -1044,6 +1044,55 @@ ipcMain.handle('update-order-status', async (_e, orderId: string, status: string
   }
 })
 
+interface ScanReadyPayload {
+  success: true
+  requested: boolean
+  label: string
+  channel: string
+  message: string | null
+}
+
+ipcMain.handle('scan-order-ready', async (_e, orderId: string, connectionId?: string) => {
+  const conexoes = connectionId
+    ? getConnections().filter((conexao) => conexao.id === connectionId)
+    : getConnections()
+
+  if (conexoes.length === 0) {
+    return { ok: false, error: 'Configure a URL e o código da loja' }
+  }
+
+  // Sem connectionId (pedido fora dos 100 cartões carregados), consulta todas
+  // as lojas. UUID é globalmente único; a primeira resposta válida identifica
+  // também qual credencial deve ser usada nas próximas ações daquele pedido.
+  const tentativas = await Promise.allSettled(
+    conexoes.map(async (conexao) => ({
+      connectionId: conexao.id,
+      payload: await desktopRequest<ScanReadyPayload>(
+        `/api/desktop/orders/${encodeURIComponent(orderId)}/pronto-scan`,
+        { method: 'POST' },
+        conexao.id
+      ),
+    }))
+  )
+
+  const encontrada = tentativas.find(
+    (tentativa): tentativa is PromiseFulfilledResult<{ connectionId: string; payload: ScanReadyPayload }> =>
+      tentativa.status === 'fulfilled'
+  )
+  if (encontrada) {
+    return { ok: true, ...encontrada.value.payload, connectionId: encontrada.value.connectionId }
+  }
+
+  const mensagens = tentativas
+    .filter((tentativa): tentativa is PromiseRejectedResult => tentativa.status === 'rejected')
+    .map((tentativa) => tentativa.reason instanceof Error ? tentativa.reason.message : String(tentativa.reason))
+  const erroReal = mensagens.find((mensagem) => mensagem !== 'Pedido não encontrado nesta loja')
+  return {
+    ok: false,
+    error: erroReal ?? 'Comanda escaneada, mas o pedido não foi encontrado nas lojas deste computador',
+  }
+})
+
 ipcMain.handle('get-ifood-cancel-reasons', async (_e, orderId: string, connectionId?: string) => {
   try {
     const data = await desktopRequest<{ reasons: { code: string; description: string }[] }>(

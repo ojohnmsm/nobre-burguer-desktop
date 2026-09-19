@@ -10,8 +10,9 @@ import { CapivaraMark } from './components/CapivaraMark'
 import { ehMarketplace, KANBAN_COLUMNS, STATUS_LABELS, type Order, type OrderStatus } from './types'
 import { rankStatus } from './orderFlow'
 import { useBarcodeScanner } from './useBarcodeScanner'
+import { orderLabel } from './orderLabel'
 import { compararFilaCozinha } from './orderTiming'
-import type { WhatsappConnectionState, WhatsappStatusConversation } from './electron-api'
+import type { ScanReadyResult, WhatsappConnectionState, WhatsappStatusConversation } from './electron-api'
 import { loadNotificationSounds, playDriverArrivedAlert, playMessageAlert, playOrderAlert } from './notification-sound'
 
 type Tab = 'kanban' | 'historico' | 'whatsapp' | 'settings'
@@ -115,11 +116,17 @@ export default function App() {
     for (const idOpt of [...optimisticRef.current.keys()]) {
       if (!idsAtuais.has(idOpt)) optimisticRef.current.delete(idOpt)
     }
+    const marketplaceSemConfirmacao: string[] = []
     const comOtimista = operationalOrders.map(order => {
       const opt = optimisticRef.current.get(order.id)
       if (!opt) return order
-      if (rankStatus(order.status) >= rankStatus(opt.status) || agoraMerge - opt.ts > 90_000) {
+      if (rankStatus(order.status) >= rankStatus(opt.status)) {
         optimisticRef.current.delete(order.id)
+        return order
+      }
+      if (agoraMerge - opt.ts > 90_000) {
+        optimisticRef.current.delete(order.id)
+        marketplaceSemConfirmacao.push(orderLabel(order))
         return order
       }
       return { ...order, status: opt.status }
@@ -143,6 +150,10 @@ export default function App() {
     setOrders(estabilizados)
     setAgoraBucket(Math.floor(agoraMerge / 15000))
     hasLoadedOrdersRef.current = true
+
+    if (marketplaceSemConfirmacao.length > 0) {
+      addNotification(`O marketplace não confirmou o pedido #${marketplaceSemConfirmacao.join(', #')}; ele voltou ao estado anterior`)
+    }
 
     // Pedido NOVO (alerta sonoro + toast + impressão) é responsabilidade do
     // PROCESSO PRINCIPAL agora (evento 'novo-pedido'), porque o timer do
@@ -409,10 +420,29 @@ export default function App() {
     setOrdersSynced(previous => previous.map(order => order.id === id ? { ...order, status } : order))
   }, [addNotification])
 
+  const markReadyByScan = useCallback(async (id: string, connectionId?: string): Promise<ScanReadyResult> => {
+    const result = await window.api.scanOrderReady(id, connectionId)
+    if (!result.ok) return result
+
+    const pedidoVisivel = ordersRef.current.find((order) => order.id === id)
+    if (pedidoVisivel) {
+      if (result.requested) {
+        optimisticRef.current.set(id, { status: 'ready_to_pickup', ts: Date.now() })
+      } else {
+        optimisticRef.current.delete(id)
+      }
+      setOrdersSynced((previous) => previous.map((order) =>
+        order.id === id ? { ...order, status: 'ready_to_pickup' } : order
+      ))
+    }
+
+    return result
+  }, [])
+
   // Leitor de código de barras/QR do balcão: escanear a comanda impressa
   // marca o pedido como pronto sem procurar o card no kanban — ver
   // useBarcodeScanner.ts para a heurística de rajada de teclado.
-  useBarcodeScanner({ ordersRef, updateStatus, notify: addNotification, enabled: configured })
+  useBarcodeScanner({ ordersRef, markReady: markReadyByScan, notify: addNotification, enabled: configured })
 
   const [cancelandoIfood, setCancelandoIfood] = useState<Order | null>(null)
   const [pausePanelOpen, setPausePanelOpen] = useState(false)

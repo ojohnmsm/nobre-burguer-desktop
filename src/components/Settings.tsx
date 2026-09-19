@@ -21,7 +21,9 @@ const EMPTY_CONFIG: DesktopConfig = {
 
 /** Pedido de mentira só para conferir a saída da impressora. */
 const PEDIDO_TESTE = {
-  id: 'teste-0000-0000-0000-000000000000',
+  // O scanner reconhece PEDIDO:TESTE como diagnóstico, sem chamar a API nem
+  // alterar pedido real.
+  id: 'TESTE',
   channel: 'web',
   order_number: 1,
   stores: { store_number: 1 },
@@ -372,8 +374,11 @@ export function Settings({ onSaved }: Props) {
           disabled={!config.printerName}
           className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] text-[var(--text-muted)] transition-colors disabled:opacity-40"
         >
-          <Printer size={12} /> Testar impressão
+          <Printer size={12} /> Testar impressão e QR
         </button>
+        <p className="text-[11px] text-[var(--text-xmuted)]">
+          Depois de imprimir, deixe o Cardapia em primeiro plano e leia o QR da comanda de teste. O aplicativo confirmará na tela sem alterar nenhum pedido.
+        </p>
       </section>
 
       <section className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-4 space-y-3 shadow-[var(--shadow-sm)]">

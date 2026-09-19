@@ -3,6 +3,7 @@ import { writeFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { execFile, spawn } from 'child_process'
 import { randomUUID } from 'crypto'
+import QRCode from 'qrcode'
 import { orderLabel, origemLabel } from './receiptFormat'
 import { registrar } from './log'
 
@@ -45,22 +46,55 @@ const CMD = {
 type LineOpts = { center?: boolean; bold?: boolean; double?: boolean; qr?: boolean }
 
 /**
- * QR code nativo via GS ( k — a própria impressora renderiza a partir dos
- * bytes, sem lib de geração. Suportado pela grande maioria das térmicas
- * ESC/POS (Epson e os clones comuns no Brasil, Elgin/Bematech inclusive).
+ * QR como imagem raster ESC/POS (GS v 0), em vez do gerador de QR nativo da
+ * impressora. Muitos clones aceitam texto RAW mas ignoram silenciosamente os
+ * comandos GS ( k; raster usa o mesmo desenho em qualquer modelo e também no
+ * fallback HTML. A margem de 4 módulos é a zona de silêncio do QR.
  */
-function qrCode(data: string, moduleSize = 6, ecLevel = 0x31): Buffer {
-  const payload = Buffer.from(data, 'latin1')
-  const storeLen = payload.length + 3
-  const pL = storeLen & 0xff
-  const pH = (storeLen >> 8) & 0xff
+function qrCodeRaster(data: string, moduleSize = 6): Buffer {
+  const modules = QRCode.create(data, { errorCorrectionLevel: 'M' }).modules
+  const quietModules = 4
+  const sidePixels = (modules.size + quietModules * 2) * moduleSize
+  const widthBytes = Math.ceil(sidePixels / 8)
+  const pixels = Buffer.alloc(widthBytes * sidePixels)
+
+  for (let moduleY = 0; moduleY < modules.size; moduleY += 1) {
+    for (let moduleX = 0; moduleX < modules.size; moduleX += 1) {
+      if (!modules.get(moduleY, moduleX)) continue
+      const startX = (moduleX + quietModules) * moduleSize
+      const startY = (moduleY + quietModules) * moduleSize
+      for (let y = startY; y < startY + moduleSize; y += 1) {
+        for (let x = startX; x < startX + moduleSize; x += 1) {
+          pixels[y * widthBytes + (x >> 3)] |= 0x80 >> (x & 7)
+        }
+      }
+    }
+  }
+
   return Buffer.concat([
-    Buffer.from([GS, 0x28, 0x6b, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00]), // modelo 2
-    Buffer.from([GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x43, moduleSize]), // tamanho do modulo
-    Buffer.from([GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x45, ecLevel]),    // correcao de erro
-    Buffer.from([GS, 0x28, 0x6b, pL, pH, 0x31, 0x50, 0x30]), payload, // armazena dados
-    Buffer.from([GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x51, 0x30]),       // imprime
+    Buffer.from([
+      GS, 0x76, 0x30, 0x00,
+      widthBytes & 0xff, (widthBytes >> 8) & 0xff,
+      sidePixels & 0xff, (sidePixels >> 8) & 0xff,
+    ]),
+    pixels,
   ])
+}
+
+/** Mesmo QR em SVG para o caminho de impressão do Chromium. */
+function qrCodeSvg(data: string): string {
+  const modules = QRCode.create(data, { errorCorrectionLevel: 'M' }).modules
+  const quietModules = 4
+  const side = modules.size + quietModules * 2
+  const squares: string[] = []
+
+  for (let y = 0; y < modules.size; y += 1) {
+    for (let x = 0; x < modules.size; x += 1) {
+      if (modules.get(y, x)) squares.push(`M${x + quietModules} ${y + quietModules}h1v1h-1z`)
+    }
+  }
+
+  return `<svg viewBox="0 0 ${side} ${side}" role="img" aria-label="QR Code do pedido" shape-rendering="crispEdges"><rect width="${side}" height="${side}" fill="#fff"/><path d="${squares.join('')}" fill="#000"/></svg>`
 }
 
 /**
@@ -257,9 +291,7 @@ export function buildReceiptLines(order: ReceiptOrder, width: 32 | 48 = 32): Rec
   // QR do pedido, para o leitor de código de barras/QR marcar "pronto" sem
   // procurar o card no kanban (ver useBarcodeScanner.ts no renderer). Por
   // último, perto do corte — fácil de escanear sem desdobrar a comanda
-  // toda. `qr: true` faz buildReceiptEscPos desenhar como GS(k em vez de
-  // texto; buildReceiptHtml (fallback) ignora a flag e imprime como texto
-  // mesmo, não escaneável nesse caminho raro mas sem perder informação.
+  // toda. `qr: true` faz os dois caminhos de impressão desenharem o mesmo QR.
   out.push(ln(`PEDIDO:${String(order.id)}`, { center: true, bold: true, qr: true }))
 
   return out
@@ -272,7 +304,7 @@ export function buildReceiptEscPos(order: ReceiptOrder, width: 32 | 48 = 32): Bu
     if (l.qr) {
       // Feed em branco nos dois lados — zona de silêncio que leitores baratos
       // exigem pra decodificar de forma confiável.
-      partes.push(CMD.alignCenter, Buffer.from('\n'), qrCode(l.text), Buffer.from('\n'), CMD.alignLeft)
+      partes.push(CMD.alignCenter, Buffer.from('\n'), qrCodeRaster(l.text), Buffer.from('\n'), CMD.alignLeft)
     } else {
       partes.push(line(l.text, l))
     }
@@ -299,6 +331,9 @@ export function buildReceiptHtml(order: Record<string, unknown>, widthCols: 32 |
 
   const linhas = buildReceiptLines(order, widthCols)
     .map((l) => {
+      if (l.qr) {
+        return `<span class="qr">${qrCodeSvg(l.text)}<span>${h(l.text)}</span></span>`
+      }
       const classes = [
         l.center ? 'c' : '',
         l.bold ? 'b' : '',
@@ -331,6 +366,9 @@ export function buildReceiptHtml(order: Record<string, unknown>, widthCols: 32 |
   .c     { text-align: center; }
   .b     { font-weight: bold; }
   .d     { font-size: 15pt; font-weight: bold; line-height: 1.1; }
+  .qr    { display: flex; flex-direction: column; align-items: center; break-inside: avoid; }
+  .qr svg { display: block; width: 34mm; height: 34mm; }
+  .qr span { margin-top: 1mm; font-size: 6pt; font-weight: bold; }
 </style>
 </head><body><pre>${linhas}</pre></body></html>`
 }
