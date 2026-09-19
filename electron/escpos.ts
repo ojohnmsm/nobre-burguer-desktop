@@ -42,7 +42,26 @@ const CMD = {
   feedCut: Buffer.from([0x0a, 0x0a, 0x0a, 0x0a, GS, 0x56, 66, 0]),
 }
 
-type LineOpts = { center?: boolean; bold?: boolean; double?: boolean }
+type LineOpts = { center?: boolean; bold?: boolean; double?: boolean; qr?: boolean }
+
+/**
+ * QR code nativo via GS ( k — a própria impressora renderiza a partir dos
+ * bytes, sem lib de geração. Suportado pela grande maioria das térmicas
+ * ESC/POS (Epson e os clones comuns no Brasil, Elgin/Bematech inclusive).
+ */
+function qrCode(data: string, moduleSize = 6, ecLevel = 0x31): Buffer {
+  const payload = Buffer.from(data, 'latin1')
+  const storeLen = payload.length + 3
+  const pL = storeLen & 0xff
+  const pH = (storeLen >> 8) & 0xff
+  return Buffer.concat([
+    Buffer.from([GS, 0x28, 0x6b, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00]), // modelo 2
+    Buffer.from([GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x43, moduleSize]), // tamanho do modulo
+    Buffer.from([GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x45, ecLevel]),    // correcao de erro
+    Buffer.from([GS, 0x28, 0x6b, pL, pH, 0x31, 0x50, 0x30]), payload, // armazena dados
+    Buffer.from([GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x51, 0x30]),       // imprime
+  ])
+}
 
 /**
  * Uma linha da comanda, ainda sem saber como vai ser impressa.
@@ -235,13 +254,29 @@ export function buildReceiptLines(order: ReceiptOrder, width: 32 | 48 = 32): Rec
   out.push(ln(div))
   out.push(ln('Obrigado!', { center: true }))
 
+  // QR do pedido, para o leitor de código de barras/QR marcar "pronto" sem
+  // procurar o card no kanban (ver useBarcodeScanner.ts no renderer). Por
+  // último, perto do corte — fácil de escanear sem desdobrar a comanda
+  // toda. `qr: true` faz buildReceiptEscPos desenhar como GS(k em vez de
+  // texto; buildReceiptHtml (fallback) ignora a flag e imprime como texto
+  // mesmo, não escaneável nesse caminho raro mas sem perder informação.
+  out.push(ln(`PEDIDO:${String(order.id)}`, { center: true, bold: true, qr: true }))
+
   return out
 }
 
 /** Desenha as linhas como bytes ESC/POS — o caminho primario. */
 export function buildReceiptEscPos(order: ReceiptOrder, width: 32 | 48 = 32): Buffer {
   const partes: Buffer[] = [CMD.init]
-  for (const l of buildReceiptLines(order, width)) partes.push(line(l.text, l))
+  for (const l of buildReceiptLines(order, width)) {
+    if (l.qr) {
+      // Feed em branco nos dois lados — zona de silêncio que leitores baratos
+      // exigem pra decodificar de forma confiável.
+      partes.push(CMD.alignCenter, Buffer.from('\n'), qrCode(l.text), Buffer.from('\n'), CMD.alignLeft)
+    } else {
+      partes.push(line(l.text, l))
+    }
+  }
   partes.push(CMD.feedCut)
   return Buffer.concat(partes)
 }

@@ -9,6 +9,7 @@ import { DisputasPanel } from './components/DisputasPanel'
 import { CapivaraMark } from './components/CapivaraMark'
 import { ehMarketplace, KANBAN_COLUMNS, STATUS_LABELS, type Order, type OrderStatus } from './types'
 import { rankStatus } from './orderFlow'
+import { useBarcodeScanner } from './useBarcodeScanner'
 import { compararFilaCozinha } from './orderTiming'
 import type { WhatsappConnectionState, WhatsappStatusConversation } from './electron-api'
 import { loadNotificationSounds, playDriverArrivedAlert, playMessageAlert, playOrderAlert } from './notification-sound'
@@ -407,6 +408,11 @@ export default function App() {
     optimisticRef.current.delete(id)
     setOrdersSynced(previous => previous.map(order => order.id === id ? { ...order, status } : order))
   }, [addNotification])
+
+  // Leitor de código de barras/QR do balcão: escanear a comanda impressa
+  // marca o pedido como pronto sem procurar o card no kanban — ver
+  // useBarcodeScanner.ts para a heurística de rajada de teclado.
+  useBarcodeScanner({ ordersRef, updateStatus, notify: addNotification, enabled: configured })
 
   const [cancelandoIfood, setCancelandoIfood] = useState<Order | null>(null)
   const [pausePanelOpen, setPausePanelOpen] = useState(false)
