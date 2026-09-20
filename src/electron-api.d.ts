@@ -1,4 +1,4 @@
-import type { Order, OrderStatus } from './types'
+import type { CatalogoCategoria, Order, OrderStatus } from './types'
 
 export interface DesktopConfig {
   connections: { id: string; apiBaseUrl: string; label: string }[]
@@ -84,6 +84,38 @@ export type UpdateStatusResult =
   | { ok: true; requested: boolean; message: string | null }
   | { ok: false; error: string }
 
+export type CatalogoResult =
+  | { ok: true; categorias: CatalogoCategoria[] }
+  | { ok: false; error: string }
+
+export interface PedidoBalcaoItemInput {
+  productId: string
+  variationId: string | null
+  quantity: number
+  notes: string | null
+  addonSelections: { groupId: string; optionIds: string[] }[]
+}
+
+/** Mesmo shape que RequestedOrder em lib/order-validation.ts (app web) — parseRequestedOrder lê os dois. */
+export interface PedidoBalcaoInput {
+  items: PedidoBalcaoItemInput[]
+  customerName: string
+  customerPhone: string
+  fulfillmentType: 'delivery' | 'pickup'
+  cep: string | null
+  address: string | null
+  addressNumber: string | null
+  addressComplement: string | null
+  paymentMethod: string
+  cardOnDelivery: boolean
+  changeForCents: number | null
+  notes: string | null
+}
+
+export type CriarPedidoBalcaoResult =
+  | { ok: true; orderId: string; totalCents: number }
+  | { ok: false; error: string }
+
 export type ScanReadyResult =
   | {
       ok: true
@@ -165,6 +197,8 @@ declare global {
       fetchOrderHistory: (opts: { limit: number; offsetsPorConexao?: Record<string, number>; status?: OrderStatus | '' }) => Promise<{ orders: Order[]; hasMore: boolean }>
       updateOrderStatus: (id: string, status: OrderStatus, connectionId?: string) => Promise<UpdateStatusResult>
       scanOrderReady: (id: string, connectionId?: string) => Promise<ScanReadyResult>
+      getCatalogo: (connectionId?: string) => Promise<CatalogoResult>
+      criarPedidoBalcao: (pedido: PedidoBalcaoInput, connectionId?: string) => Promise<CriarPedidoBalcaoResult>
       acknowledgeOrder: (id: string, connectionId?: string) => Promise<boolean>
       getIfoodCancelReasons: (id: string, connectionId?: string) => Promise<{ ok: boolean; reasons?: IfoodCancelReason[]; error?: string }>
       requestIfoodCancel: (id: string, code: string, description: string, connectionId?: string) => Promise<{ ok: boolean; error?: string }>

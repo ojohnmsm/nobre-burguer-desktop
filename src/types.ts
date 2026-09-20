@@ -24,7 +24,7 @@ export interface OrderItem {
 }
 
 export type FulfillmentType = 'delivery' | 'pickup'
-export type OrderChannel = 'web' | 'whatsapp' | 'ifood' | '99food'
+export type OrderChannel = 'web' | 'whatsapp' | 'ifood' | '99food' | 'balcao'
 
 export interface Order {
   id: string
@@ -144,3 +144,74 @@ export function timeAgo(iso: string, ate?: number) {
 export function ehMarketplace(channel: string | null | undefined): boolean {
   return channel === 'ifood' || channel === '99food'
 }
+
+// ── Pedido manual pelo balcão ────────────────────────────────────────────
+// Catálogo pra montar o carrinho na tela — o preço final de verdade sempre
+// vem recalculado do servidor ao fechar (mesma trava do checkout web), então
+// aqui não tem preço de complemento por variação nem limite por variação.
+
+export interface CatalogoOpcao {
+  id: string
+  nome: string
+  precoCents: number
+}
+
+export interface CatalogoGrupoComplemento {
+  id: string
+  nome: string
+  minSelections: number
+  maxSelections: number
+  pricingRule: 'sum' | 'average' | 'highest'
+  options: CatalogoOpcao[]
+}
+
+export interface CatalogoVariacao {
+  id: string
+  nome: string
+  precoCents: number
+}
+
+export interface CatalogoProduto {
+  id: string
+  nome: string
+  precoCents: number
+  variacoes: CatalogoVariacao[]
+  gruposComplemento: CatalogoGrupoComplemento[]
+}
+
+export interface CatalogoCategoria {
+  id: string
+  nome: string
+  produtos: CatalogoProduto[]
+}
+
+/** Um grupo de complemento já escolhido, dentro de um item do carrinho. */
+export interface CarrinhoComplemento {
+  groupId: string
+  groupNome: string
+  optionIds: string[]
+  /** Só pra exibir na tela — o total de verdade vem do servidor ao fechar. */
+  opcoesNomes: string[]
+}
+
+export interface CarrinhoItem {
+  /** Só pra distinguir linhas na tela (produto igual, escolhas diferentes) — não vai pro servidor. */
+  chave: string
+  productId: string
+  productNome: string
+  variationId: string | null
+  variationNome: string | null
+  quantity: number
+  addonSelections: CarrinhoComplemento[]
+  /** Preço unitário estimado (produto + variação + complementos, regra "sum") — só exibição. */
+  precoUnitarioEstimadoCents: number
+}
+
+/** Formas de pagamento recebidas na hora, presencialmente — sem Pix/link (async, fora do escopo v1). */
+export const PAYMENT_METHODS_BALCAO: { value: string; label: string; cardOnDelivery?: boolean }[] = [
+  { value: 'cash', label: 'Dinheiro' },
+  { value: 'credit_card', label: 'Crédito', cardOnDelivery: true },
+  { value: 'debit_card', label: 'Débito', cardOnDelivery: true },
+  { value: 'meal_voucher', label: 'Vale Refeição' },
+  { value: 'food_voucher', label: 'Vale Alimentação' },
+]

@@ -92,5 +92,6 @@ export function origemDoPedido(channel: string | null | undefined): Origem {
   if (channel === 'ifood') return { label: 'iFood', tom: 'ifood' }
   if (channel === '99food') return { label: '99Food', tom: '99food' }
   if (channel === 'whatsapp') return { label: 'WhatsApp', tom: 'whatsapp' }
+  if (channel === 'balcao') return { label: 'Balcão', tom: 'web' }
   return { label: 'Site', tom: 'web' }
 }

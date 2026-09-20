@@ -1110,6 +1110,32 @@ ipcMain.handle('scan-order-ready', async (_e, orderId: string, connectionId?: st
   }
 })
 
+// ── Pedido manual pelo balcão ─────────────────────────────────────────────
+ipcMain.handle('get-catalogo', async (_e, connectionId?: string) => {
+  try {
+    const data = await desktopRequest<{ categorias: unknown[] }>('/api/desktop/catalogo', {}, connectionId)
+    return { ok: true, categorias: data.categorias ?? [] }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Erro ao carregar o cardápio' }
+  }
+})
+
+ipcMain.handle('criar-pedido-balcao', async (_e, pedido: unknown, connectionId?: string) => {
+  try {
+    const data = await desktopRequest<{ orderId: string; totalCents: number }>(
+      '/api/desktop/orders',
+      { method: 'POST', body: JSON.stringify(pedido) },
+      connectionId
+    )
+    // Não espera o próximo ciclo do vigia (até 25s) — o atendente quer ver o
+    // pedido que acabou de fechar no Kanban na hora.
+    void vigiarPedidosNovos()
+    return { ok: true, orderId: data.orderId, totalCents: data.totalCents }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Não foi possível criar o pedido' }
+  }
+})
+
 ipcMain.handle('get-ifood-cancel-reasons', async (_e, orderId: string, connectionId?: string) => {
   try {
     const data = await desktopRequest<{ reasons: { code: string; description: string }[] }>(

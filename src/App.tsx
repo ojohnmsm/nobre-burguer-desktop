@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { History, LayoutGrid, Maximize2, MessageCircle, Minimize2, Minus, Power, Printer, RefreshCw, Settings as SettingsIcon, WifiOff, X } from 'lucide-react'
+import { History, LayoutGrid, Maximize2, MessageCircle, Minimize2, Minus, Plus, Power, Printer, RefreshCw, Settings as SettingsIcon, WifiOff, X } from 'lucide-react'
 import { OrderCard } from './components/OrderCard'
+import { NovoPedido } from './components/NovoPedido'
 import { Settings } from './components/Settings'
 import { WhatsappPanel } from './components/WhatsappPanel'
 import { CancelIfoodDialog } from './components/CancelIfoodDialog'
 import { StorePausePanel } from './components/StorePausePanel'
 import { DisputasPanel } from './components/DisputasPanel'
 import { CapivaraMark } from './components/CapivaraMark'
-import { ehMarketplace, KANBAN_COLUMNS, STATUS_LABELS, type Order, type OrderStatus } from './types'
+import { ehMarketplace, fmtMoney, KANBAN_COLUMNS, STATUS_LABELS, type Order, type OrderStatus } from './types'
 import { rankStatus } from './orderFlow'
 import { useBarcodeScanner } from './useBarcodeScanner'
 import { orderLabel } from './orderLabel'
@@ -15,7 +16,7 @@ import { compararFilaCozinha } from './orderTiming'
 import type { ScanReadyResult, WhatsappConnectionState, WhatsappStatusConversation } from './electron-api'
 import { loadNotificationSounds, playDriverArrivedAlert, playMessageAlert, playOrderAlert } from './notification-sound'
 
-type Tab = 'kanban' | 'historico' | 'whatsapp' | 'settings'
+type Tab = 'kanban' | 'novo-pedido' | 'historico' | 'whatsapp' | 'settings'
 const ALL_STATUSES: OrderStatus[] = [
   'pending', 'awaiting_payment', 'paid', 'preparing', 'ready_to_pickup', 'out_for_delivery', 'delivered', 'cancelled'
 ]
@@ -577,6 +578,11 @@ export default function App() {
             )}
           </button>
           {configured && (
+            <button onClick={() => setTab('novo-pedido')} title="Novo pedido" className={`p-1.5 rounded-lg transition-colors ${tab === 'novo-pedido' ? 'text-[var(--primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--border-light)]'}`}>
+              <Plus size={14} />
+            </button>
+          )}
+          {configured && (
             <button onClick={() => setTab('whatsapp')} title="WhatsApp" className={`relative p-1.5 rounded-lg transition-colors ${tab === 'whatsapp' ? 'text-[var(--primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--border-light)]'}`}>
               {whatsappDisconnected ? <WifiOff size={14} className="text-[var(--danger)]" /> : <MessageCircle size={14} />}
               {conversationsNeedingAttention.length > 0 && (
@@ -608,11 +614,11 @@ export default function App() {
         </div>
       </div>
 
-      {tab !== 'whatsapp' && tab !== 'settings' && (
+      {tab !== 'whatsapp' && tab !== 'settings' && tab !== 'novo-pedido' && (
         <DisputasPanel notify={addNotification} temIfood={stores.some(s => s.ifoodConectado)} />
       )}
 
-      {hasUrgentAlert && tab !== 'whatsapp' && (
+      {hasUrgentAlert && tab !== 'whatsapp' && tab !== 'novo-pedido' && (
         <div className="flex items-center justify-between gap-3 flex-wrap px-3 py-2 bg-red-500/10 border-b border-red-500/30 flex-shrink-0">
           <div className="flex items-center gap-3 flex-wrap text-xs">
             {unacknowledgedOrders.length > 0 && (
@@ -648,6 +654,16 @@ export default function App() {
 
       <div className="flex-1 overflow-hidden">
         {tab === 'settings' && <div className="h-full overflow-y-auto"><Settings onSaved={() => void handleSettingsSaved()} /></div>}
+
+        {tab === 'novo-pedido' && (
+          <NovoPedido
+            stores={stores}
+            onPedidoCriado={({ totalCents }) => {
+              addNotification(`Pedido criado — ${fmtMoney(totalCents)}`)
+              setTab('kanban')
+            }}
+          />
+        )}
 
         {tab === 'whatsapp' && (
           <div className="h-full overflow-y-auto p-3">

@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('api', {
   fetchOrderHistory: (opts: unknown)                   => ipcRenderer.invoke('fetch-order-history', opts),
   updateOrderStatus: (id: string, status: string, connectionId?: string) => ipcRenderer.invoke('update-order-status', id, status, connectionId),
   scanOrderReady:    (id: string, connectionId?: string) => ipcRenderer.invoke('scan-order-ready', id, connectionId),
+  getCatalogo:       (connectionId?: string) => ipcRenderer.invoke('get-catalogo', connectionId),
+  criarPedidoBalcao: (pedido: unknown, connectionId?: string) => ipcRenderer.invoke('criar-pedido-balcao', pedido, connectionId),
   acknowledgeOrder:  (id: string, connectionId?: string) => ipcRenderer.invoke('acknowledge-order', id, connectionId),
   getIfoodCancelReasons: (id: string, connectionId?: string) => ipcRenderer.invoke('get-ifood-cancel-reasons', id, connectionId),
   requestIfoodCancel: (id: string, code: string, description: string, connectionId?: string) => ipcRenderer.invoke('request-ifood-cancel', id, code, description, connectionId),

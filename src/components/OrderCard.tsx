@@ -1,5 +1,5 @@
 import { memo, useState } from 'react'
-import { ChevronDown, ChevronUp, Printer, Clock, Phone, MapPin, MessageSquare } from 'lucide-react'
+import { ChevronDown, ChevronUp, Printer, Clock, Phone, MapPin, MessageSquare, Store } from 'lucide-react'
 import { Order, OrderStatus, STATUS_LABELS, PAYMENT_LABELS, fmtMoney, timeAgo , ehMarketplace} from '../types'
 import { orderLabel } from '../orderLabel'
 import { origemDoPedido, proximaEtapa } from '../orderFlow'
@@ -414,7 +414,9 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
 // bateria nada.
 export const OrderCard = memo(OrderCardImpl)
 
-const CANAIS: Record<Order['channel'], { src: string; alt: string; largura: number }> = {
+// Parcial de propósito: "balcao" não tem logo (pedido criado por quem já está
+// na tela, não veio de canal nenhum) — CanalCompacto cai no ícone genérico.
+const CANAIS: Partial<Record<Order['channel'], { src: string; alt: string; largura: number }>> = {
   ifood: { src: canalIfood, alt: 'iFood', largura: 28 },
   '99food': { src: canal99Food, alt: '99Food', largura: 34 },
   whatsapp: { src: canalWhatsapp, alt: 'WhatsApp', largura: 15 },
@@ -423,6 +425,11 @@ const CANAIS: Record<Order['channel'], { src: string; alt: string; largura: numb
 
 function CanalCompacto({ canal }: { canal: Order['channel'] }) {
   const item = CANAIS[canal]
+  if (!item) {
+    return <span className="flex h-5 items-center rounded-sm border border-[var(--border)] bg-white px-1.5" title="Balcão">
+      <Store size={12} className="text-[var(--text-muted)]" />
+    </span>
+  }
   return <span className="flex h-5 items-center rounded-sm border border-[var(--border)] bg-white px-1.5" title={item.alt}>
     <img src={item.src} alt={item.alt} width={item.largura} className="max-h-3.5 object-contain" />
   </span>
