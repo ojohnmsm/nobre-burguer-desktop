@@ -852,22 +852,14 @@ let primeiraVarreduraMain = true
 const NOVO_PEDIDO_RECENTE_MS = 20 * 60 * 1000
 
 // ── Ritmo do vigia ────────────────────────────────────────────────────────
-// Rápido (7s) enquanto há movimento; devagar (25s) depois de um tempo sem
-// pedido novo — loja fechada ou de madrugada não precisa da mesma frequência
-// do horário de pico. Corta pela metade as requisições do balcão pro servidor
-// nesses períodos. Trade-off aceito: um pedido que chegar bem no início de uma
-// janela ociosa pode demorar até ~18s a mais que hoje para acender o alarme da
-// cozinha, no pior caso — só nesse período, nunca durante movimento.
+// Fixo em 7s: o app da cozinha precisa mostrar o pedido com baixa latência
+// mesmo depois de uma madrugada ou período longo sem movimento.
 let vigiaEmAndamento = false
-let ultimoPedidoNovoEm = Date.now()
 let timerVigia: ReturnType<typeof setTimeout> | null = null
-const INTERVALO_ATIVO_MS = 7_000
-const INTERVALO_OCIOSO_MS = 25_000
-const JANELA_ATIVIDADE_MS = 10 * 60 * 1000
+const INTERVALO_VIGIA_MS = 7_000
 
 function agendarVigiaDePedidos() {
   if (timerVigia) clearTimeout(timerVigia)
-  const ocioso = Date.now() - ultimoPedidoNovoEm > JANELA_ATIVIDADE_MS
   timerVigia = setTimeout(async () => {
     // Não empilha: se o ciclo anterior ainda não terminou (servidor lento),
     // este tick só reagenda — evita duas buscas da mesma loja em voo ao
@@ -881,7 +873,7 @@ function agendarVigiaDePedidos() {
       }
     }
     agendarVigiaDePedidos()
-  }, ocioso ? INTERVALO_OCIOSO_MS : INTERVALO_ATIVO_MS)
+  }, INTERVALO_VIGIA_MS)
 }
 
 // Espelha ehMarketplace() de src/types.ts — duplicado de propósito: o build do
@@ -931,8 +923,6 @@ async function vigiarPedidosNovos() {
   mainWindow?.webContents.send('pedidos-atualizados', operacionais)
 
   if (novos.length === 0) return
-
-  ultimoPedidoNovoEm = Date.now()
 
   const cfg = loadConfig()
   const autoPrint = cfg.autoPrint !== 'false'
@@ -1459,8 +1449,7 @@ app.whenReady().then(() => {
   }
 
   // Vigia de pedidos novos no processo principal — imprime e notifica mesmo com
-  // a janela minimizada / na bandeja. Auto-agendado (ver agendarVigiaDePedidos):
-  // o ritmo varia sozinho conforme o movimento.
+  // a janela minimizada / na bandeja. Auto-agendado a cada 7 segundos.
   setTimeout(() => agendarVigiaDePedidos(), 2000)
 
   // Diagnóstico: primeiro relatório com folga (depois da 1ª comanda provável),
