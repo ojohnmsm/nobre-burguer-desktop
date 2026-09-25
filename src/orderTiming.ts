@@ -226,6 +226,19 @@ export function textoEntregador(d: { estagio: 'a_caminho' | 'na_loja' | 'coletou
 }
 
 /**
+ * Versão enxuta pro card FECHADO do Kanban — regra dos três segundos: só o
+ * ícone (já indica "é o entregador") + até ~7 caracteres de texto. Sem
+ * "Entregador" na frente, sem nome — isso fica pra quando abrir os detalhes
+ * (`textoEntregador`, acima). Cópia do equivalente em lib/order-timing.ts.
+ */
+export function textoEntregadorCurto(d: { estagio: 'a_caminho' | 'na_loja' | 'coletou'; pickupEtaMin?: number | null }): string {
+  if (d.estagio === 'na_loja') return 'na loja'
+  if (d.estagio === 'coletou') return 'saiu'
+  if (d.pickupEtaMin != null) return `${d.pickupEtaMin} min`
+  return 'indo'
+}
+
+/**
  * Estágios do webhook `deliveryStatus` da 99Food (doc "Logistics Webhooks").
  * Nomenclatura deles: B = loja (origem), C = cliente (destino) — por isso
  * `rider_to_B_ETA` é o ETA até a LOJA, não até o cliente.
@@ -278,6 +291,44 @@ export function textoEntrega99Food(order: TimingOrder, agora: number = Date.now(
     return estagio === 120 ? `${quem} · chega na loja em ${etaMin} min` : `${quem} · chega em ${etaMin} min`
   }
   return estagio === 120 ? `${quem} a caminho da loja` : `${quem} a caminho`
+}
+
+/**
+ * Versão enxuta pro card FECHADO do Kanban — mesma regra dos três segundos
+ * de `textoEntregadorCurto`. Sem nome, e sem "retirada"/"entrega pela loja":
+ * o card já tem o selo RETIRADA/ENTREGA pra essa distinção; aqui só importa
+ * quem está de fato a caminho pela 99Food. Cópia do equivalente em
+ * lib/order-timing.ts (sem o fallback de `fulfillment_mode` que só existe lá
+ * — este arquivo já não checava isso em `textoEntrega99Food`, então manter a
+ * mesma base aqui evita as duas funções discordarem sobre quando há
+ * entregador da 99Food).
+ */
+export function textoEntrega99FoodCurto(order: TimingOrder, agora: number = Date.now()): string | null {
+  if (order.channel !== '99food') return null
+  if (order.status === 'delivered' || order.status === 'cancelled') return null
+  const payload = order.external_payload
+  if (!payload || typeof payload !== 'object') return null
+  const deliveryType = (payload as { delivery_type?: unknown }).delivery_type
+  if (deliveryType !== 1 && deliveryType !== '1') return null
+
+  const aoVivo = (payload as { _entrega_ao_vivo_99food?: unknown })._entrega_ao_vivo_99food
+  const dados = aoVivo && typeof aoVivo === 'object' ? aoVivo as Record<string, unknown> : null
+  const estagio = dados ? numeroPositivo(dados.deliveryStatus) : null
+
+  if (estagio === 130) return 'na loja'
+  if (estagio === 140) return 'saiu'
+  if (estagio === 150) return 'chegou'
+  // 160 (entregue) não chega aqui — status já vira delivered. 170-190
+  // (cancelada/reatribuído/abortado) são raros e cabem melhor no detalhe.
+  if (estagio != null && estagio > 150) return null
+
+  const etaVivoSeg = estagio === 120 ? numeroPositivo(dados?.riderToBEtaEpochSec) : null
+  const etaInicialSeg = numeroPositivo((payload as { expected_arrived_eta?: unknown }).expected_arrived_eta)
+  const segundosEta = etaVivoSeg ?? etaInicialSeg
+  const etaMin = segundosEta != null ? Math.round((segundosEta * 1000 - agora) / 60000) : null
+
+  if (etaMin != null && etaMin > 0) return `${etaMin} min`
+  return 'indo'
 }
 
 export function horaLocal(iso: string): string {
