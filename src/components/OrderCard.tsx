@@ -3,7 +3,7 @@ import { ChevronDown, ChevronUp, Printer, Clock, Phone, MapPin, MessageSquare, S
 import { Order, OrderStatus, STATUS_LABELS, PAYMENT_LABELS, fmtMoney, timeAgo , ehMarketplace} from '../types'
 import { orderLabel } from '../orderLabel'
 import { origemDoPedido, proximaEtapa } from '../orderFlow'
-import { horaLocal, iconeVeiculo, nivelUrgencia, preparoInfo, textoEntregador, textoEntrega99Food } from '../orderTiming'
+import { horaLocal, iconeVeiculo, nivelUrgencia, preparoInfo, textoEntregador, textoEntregadorCurto, textoEntrega99Food, textoEntrega99FoodCurto } from '../orderTiming'
 import canalIfood from '../assets/canais/canal-ifood.png'
 import canal99Food from '../assets/canais/canal-99food.png'
 import canalSite from '../assets/canais/canal-site.png'
@@ -116,7 +116,16 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
   // 99Food: "quem entrega" + estágio/ETA ao vivo, sem rastreio de estágio pro
   // iFood (esse já vem de `driver`) — mesmo slot visual.
   const entrega99Food = textoEntrega99Food(order, agora)
+  const entrega99FoodCurto = textoEntrega99FoodCurto(order, agora)
   const codigo99Food = codigoEntrega99Food(order)
+  // Selo enxuto pro card FECHADO (regra dos três segundos: ícone + até ~7
+  // caracteres, sem nome) — cópia do mesmo ajuste em app/admin/pedidos no
+  // projeto web. A frase completa (com nome) continua só no card expandido,
+  // mais abaixo — não muda.
+  const textoChipEntregador = driver ? textoEntregadorCurto(driver) : entrega99FoodCurto
+  const destaqueChipEntregador = driver
+    ? (driver.estagio === 'na_loja' || (driver.pickupEtaMin != null && driver.pickupEtaMin <= 5))
+    : (entrega99FoodCurto === 'na loja' || entrega99FoodCurto === 'chegou')
 
   function handleCancel() {
     // Todo marketplace (iFood, 99Food) cancela com motivo, pela mesma tela —
@@ -182,6 +191,18 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
                 : 'border-[var(--border)] text-[var(--text-muted)]'
               }`}>
                 {origem.label.toUpperCase()}
+              </span>
+            )}
+            {/* Só no card fechado (compact): a versão com nome/frase inteira
+                já aparece embaixo, no não-compact e no recap expandido. */}
+            {compact && textoChipEntregador && (
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-sm font-bold flex items-center gap-1 flex-shrink-0 ${
+                destaqueChipEntregador
+                  ? 'bg-amber-500/15 text-[var(--primary)]'
+                  : 'border border-[var(--border)] text-[var(--text-muted)]'
+              }`}>
+                {driver ? iconeVeiculo(driver.veiculo) : '🛵'}
+                {textoChipEntregador}
               </span>
             )}
             {/* A etiqueta da loja só aparece quando o computador atende mais de
