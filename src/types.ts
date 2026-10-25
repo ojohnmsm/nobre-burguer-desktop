@@ -111,6 +111,17 @@ export const PAYMENT_LABELS: Record<string, string> = {
   card_on_delivery: 'Cartão na entrega',
 }
 
+/**
+ * Dinheiro, vale e cartão na maquininha são cobrados na porta; o resto só chega
+ * ao PDV depois de pago. O card precisa dizer isso — a forma sozinha ("Pix",
+ * "Dinheiro") não responde "esse pedido já foi pago?".
+ */
+export function situacaoPagamento(order: Pick<Order, 'payment_method' | 'card_on_delivery' | 'status'>): { texto: string; cobrar: boolean } {
+  if (order.status === 'awaiting_payment') return { texto: 'Aguardando pagamento', cobrar: false }
+  const naPorta = ['cash', 'meal_voucher', 'food_voucher'].includes(order.payment_method) || order.card_on_delivery === true
+  return naPorta ? { texto: 'Cobrar na entrega', cobrar: true } : { texto: 'Pago', cobrar: false }
+}
+
 export const KANBAN_COLUMNS: { id: string; label: string; statuses: OrderStatus[]; accent: string }[] = [
   // Sem coluna própria pra "novo": pendente de aceite já nasce em "Em preparo"
   // (card com destaque, ver `precisaAceite` em OrderCard) — separar numa

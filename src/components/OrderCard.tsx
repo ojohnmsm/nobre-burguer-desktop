@@ -1,6 +1,6 @@
 import { memo, useState } from 'react'
 import { ChevronDown, ChevronUp, Printer, Clock, Phone, MapPin, MessageSquare, Store } from 'lucide-react'
-import { Order, OrderStatus, STATUS_LABELS, PAYMENT_LABELS, fmtMoney, timeAgo , ehMarketplace} from '../types'
+import { Order, OrderStatus, STATUS_LABELS, PAYMENT_LABELS, fmtMoney, timeAgo , ehMarketplace, situacaoPagamento} from '../types'
 import { orderLabel } from '../orderLabel'
 import { origemDoPedido, proximaEtapa } from '../orderFlow'
 import { horaLocal, iconeVeiculo, nivelUrgencia, preparoInfo, textoEntregador, textoEntregadorCurto, textoEntrega99Food, textoEntrega99FoodCurto } from '../orderTiming'
@@ -18,6 +18,18 @@ const STATUS_COLORS: Record<OrderStatus, string> = {
   out_for_delivery: 'text-purple-700 border-purple-300',
   delivered:        'text-[var(--text-xmuted)] border-[var(--border)]',
   cancelled:        'text-[var(--danger)] border-red-300',
+}
+
+function SeloPagamento({ order }: { order: Order }) {
+  const { texto, cobrar } = situacaoPagamento(order)
+  const valor = cobrar ? ` · ${fmtMoney(order.total_cents)}` : ''
+  return (
+    <span className={`inline-block mt-1 text-[10px] font-bold px-1.5 py-0.5 rounded border ${
+      cobrar ? 'text-[var(--danger)] border-red-300 bg-red-50' : 'text-[var(--success)] border-green-300 bg-green-50'
+    }`}>
+      {texto}{valor}
+    </span>
+  )
 }
 
 /**
@@ -232,6 +244,7 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
                     pagamento só polui o card. */}
                 {!doMarketplace && <> · {PAYMENT_LABELS[order.payment_method] || order.payment_method}{order.card_on_delivery && ' (na entrega)'}</>}
               </p>
+              {!doMarketplace && <SeloPagamento order={order} />}
               {!isTerminal && preparo.alvoISO && (
                 <p className={`text-xs mt-0.5 flex items-center gap-1 ${
                   preparo.atrasado ? 'text-[var(--danger)] font-bold'
@@ -300,7 +313,10 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
           {compact && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pb-2 border-b border-[var(--border)] text-xs">
               {!doMarketplace && (
-                <span className="text-[var(--text-muted)]">{PAYMENT_LABELS[order.payment_method] || order.payment_method}{order.card_on_delivery && ' (na entrega)'}</span>
+                <>
+                  <span className="text-[var(--text-muted)]">{PAYMENT_LABELS[order.payment_method] || order.payment_method}{order.card_on_delivery && ' (na entrega)'}</span>
+                  <SeloPagamento order={order} />
+                </>
               )}
               {!isTerminal && preparo.alvoISO && (
                 <span className={`flex items-center gap-1 ${

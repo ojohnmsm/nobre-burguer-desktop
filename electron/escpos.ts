@@ -284,6 +284,17 @@ export function buildReceiptLines(
     out.push(ln(row('Cliente pagou', Rf(ep.total.orderAmount)), { bold: true }))
   }
   out.push(ln(`Pagto: ${rotuloPagamento(order)}`, { bold: true }))
+  // Diz de forma inequívoca se o dinheiro já entrou ou se o entregador/balcão
+  // precisa receber — antes a comanda só trazia a forma, e Pix pago e dinheiro
+  // saíam parecidos.
+  const cobraNaPorta = ['cash', 'meal_voucher', 'food_voucher'].includes(String(order.payment_method)) || order.card_on_delivery === true
+  if (order.status === 'awaiting_payment') {
+    out.push(ln('*** AGUARDANDO PAGAMENTO ***', { center: true, bold: true }))
+  } else if (cobraNaPorta) {
+    out.push(ln(`*** COBRAR ${isPickup ? 'NA RETIRADA' : 'NA ENTREGA'}: ${R(order.total_cents as number)} ***`, { center: true, bold: true }))
+  } else {
+    out.push(ln('*** PAGO - NAO COBRAR ***', { center: true, bold: true }))
+  }
   if (order.change_for_cents) out.push(ln(`Troco para: ${R(order.change_for_cents as number)}`))
   if (order.notes) {
     out.push(ln(div))
