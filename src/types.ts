@@ -218,8 +218,13 @@ export interface CarrinhoItem {
   precoUnitarioEstimadoCents: number
 }
 
-/** Formas de pagamento recebidas na hora, presencialmente — sem Pix/link (async, fora do escopo v1). */
+/**
+ * Formas de pagamento do pedido manual. Pix aqui é o que já caiu na chave da
+ * loja — o servidor grava o pedido de balcão como pendente, não como
+ * aguardando pagamento, e a comanda sai "PAGO". Link de cartão segue fora.
+ */
 export const PAYMENT_METHODS_BALCAO: { value: string; label: string; cardOnDelivery?: boolean }[] = [
+  { value: 'pix', label: 'Pix (já recebido)' },
   { value: 'cash', label: 'Dinheiro' },
   { value: 'credit_card', label: 'Crédito', cardOnDelivery: true },
   { value: 'debit_card', label: 'Débito', cardOnDelivery: true },
