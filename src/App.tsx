@@ -325,6 +325,9 @@ export default function App() {
   const [openConversation, setOpenConversation] = useState<WhatsappStatusConversation | null>(null)
 
   function conversationNeedsAttention(conversation: WhatsappStatusConversation): boolean {
+    // Bot pediu atendente e ninguém atendeu: a última mensagem ali é a despedida
+    // do bot, então o critério de baixo sozinho nunca acendia este caso.
+    if (conversation.aguardandoAtendente) return true
     if (!conversation.lastMessage || conversation.lastMessage.role !== 'customer') return false
     return !conversation.lastSeenAt || new Date(conversation.lastMessage.createdAt) > new Date(conversation.lastSeenAt)
   }
@@ -339,11 +342,43 @@ export default function App() {
   // Alerta sonoro toca UMA vez quando aparece, não em laço até reconhecer. O
   // som do pedido dispara em loadOrders() a cada pedido novo; o de mensagem,
   // aqui, na transição para "precisa de atenção".
-  const hasMessageAlert = conversationsNeedingAttention.length > 0 || whatsappDisconnected
+
+  // Antes o som dependia só de "há algo pendente ou não": bastava UMA conversa
+  // antiga ficar pendente (propaganda de fornecedor, por exemplo) para o alerta
+  // nunca mais tocar para ninguém. Agora toca a cada conversa NOVA que pede
+  // atenção, e repete de minuto em minuto enquanto houver cliente esperando
+  // atendente — é venda parada, não pode depender de alguém olhar a tela.
+  const idsPedindoAtencao = conversationsNeedingAttention.map(conversation => conversation.id).join(',')
+  const esperandoAtendente = whatsappConversations.filter(conversation => conversation.aguardandoAtendente)
+  const idsEsperandoAtendente = esperandoAtendente.map(conversation => conversation.id).join(',')
+  const idsJaAlertadosRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
-    if (hasMessageAlert) playMessageAlert()
-  }, [hasMessageAlert])
+    const atuais = new Set(idsPedindoAtencao ? idsPedindoAtencao.split(',') : [])
+    const temNova = [...atuais].some(id => !idsJaAlertadosRef.current.has(id))
+    idsJaAlertadosRef.current = atuais
+    if (temNova) playMessageAlert()
+  }, [idsPedindoAtencao])
+
+  useEffect(() => {
+    if (whatsappDisconnected) playMessageAlert()
+  }, [whatsappDisconnected])
+
+  useEffect(() => {
+    if (!idsEsperandoAtendente) return
+    const quantos = idsEsperandoAtendente.split(',').length
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && !document.hasFocus()) {
+        new Notification('Cliente esperando atendente', {
+          body: quantos > 1 ? `${quantos} conversas do WhatsApp aguardam resposta.` : 'Uma conversa do WhatsApp aguarda resposta.',
+        })
+      }
+    } catch {
+      // Notificação do sistema é reforço; o som e a faixa na tela continuam valendo.
+    }
+    const repeticao = window.setInterval(() => playMessageAlert(), 60_000)
+    return () => window.clearInterval(repeticao)
+  }, [idsEsperandoAtendente])
 
   const loadWhatsappStatus = useCallback(async () => {
     try {
@@ -368,7 +403,7 @@ export default function App() {
   function markConversationSeen(conversation: WhatsappStatusConversation) {
     const seenAt = new Date().toISOString()
     setWhatsappConversations(previous => previous.map(c =>
-      c.id === conversation.id ? { ...c, lastSeenAt: seenAt } : c
+      c.id === conversation.id ? { ...c, lastSeenAt: seenAt, aguardandoAtendente: false } : c
     ))
     void window.api.markWhatsappConversationSeen(conversation.id, conversation.connectionId)
   }

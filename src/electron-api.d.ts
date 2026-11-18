@@ -144,6 +144,8 @@ export interface WhatsappStatusConversation {
   updatedAt: string
   lastMessage: { role: string; content: string | null; createdAt: string } | null
   lastSeenAt: string | null
+  /** Bot pediu atendente e ninguém atendeu ainda (calculado no servidor; ausente em servidor antigo). */
+  aguardandoAtendente?: boolean
   /** De qual loja é esta conversa — ausente/vazia com uma loja só ligada. */
   connectionId?: string
   storeLabel?: string
