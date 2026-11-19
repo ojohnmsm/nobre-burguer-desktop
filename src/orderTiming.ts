@@ -14,6 +14,22 @@ import { ehMarketplace } from './types'
  * Terminal: congela; devolve o tempo total.
  */
 
+/**
+ * Relógio do servidor menos o deste aparelho (ms), vindo de `onSaude`. Os
+ * tempos de atraso usam a hora do servidor: um aparelho com o relógio errado
+ * mostraria pedido atrasado que não está (ou o contrário).
+ */
+let diferencaRelogioMs = 0
+
+export function definirDiferencaRelogio(ms: number): void {
+  diferencaRelogioMs = Number.isFinite(ms) ? ms : 0
+}
+
+/** "Agora" corrigido pela hora do servidor. */
+export function agoraServidor(): number {
+  return Date.now() + diferencaRelogioMs
+}
+
 export interface TimingOrder {
   channel?: string | null
   status: string
@@ -56,7 +72,7 @@ function timestampAlvo99Food(payload: Record<string, unknown> | null | undefined
 export function preparoInfo(
   order: TimingOrder,
   prepTargetMinutes: number,
-  agora: number = Date.now()
+  agora: number = agoraServidor()
 ): PreparoInfo {
   const isTerminal = order.status === 'delivered' || order.status === 'cancelled'
 
@@ -125,7 +141,7 @@ interface UrgenciaOrder extends TimingOrder {
  * `null` (cartão neutro) quando: terminal, já saiu para entrega, iFood sem
  * horário no payload, ou pedido próprio sem nenhum limite de etapa configurado.
  */
-export function nivelUrgencia(order: UrgenciaOrder, agora: number = Date.now()): NivelUrgencia | null {
+export function nivelUrgencia(order: UrgenciaOrder, agora: number = agoraServidor()): NivelUrgencia | null {
   if (order.status === 'delivered' || order.status === 'cancelled') return null
   if (order.status === 'out_for_delivery') return null
   // Pedido de marketplace: quando a cozinha marca "pronto", o resto é com o
@@ -183,7 +199,7 @@ const PESO_URGENCIA: Record<NivelUrgencia, number> = { atrasada: 0, aquecendo: 1
  *
  * Comparador para o `.sort()` da lista já filtrada por coluna.
  */
-export function compararFilaCozinha(a: FilaOrder, b: FilaOrder, agora: number = Date.now()): number {
+export function compararFilaCozinha(a: FilaOrder, b: FilaOrder, agora: number = agoraServidor()): number {
   const termA = a.status === 'delivered' || a.status === 'cancelled'
   const termB = b.status === 'delivered' || b.status === 'cancelled'
   if (termA && termB) {
@@ -261,7 +277,7 @@ const ESTAGIO_ENTREGA_99FOOD: Record<number, string> = {
  * (`_entrega_ao_vivo_99food`, gravado pelo servidor a partir do webhook
  * `deliveryStatus` — ver lib/opendelivery/transport.ts no app web).
  */
-export function textoEntrega99Food(order: TimingOrder, agora: number = Date.now()): string | null {
+export function textoEntrega99Food(order: TimingOrder, agora: number = agoraServidor()): string | null {
   if (order.channel !== '99food') return null
   if (order.status === 'delivered' || order.status === 'cancelled') return null
   const payload = order.external_payload
@@ -303,7 +319,7 @@ export function textoEntrega99Food(order: TimingOrder, agora: number = Date.now(
  * mesma base aqui evita as duas funções discordarem sobre quando há
  * entregador da 99Food).
  */
-export function textoEntrega99FoodCurto(order: TimingOrder, agora: number = Date.now()): string | null {
+export function textoEntrega99FoodCurto(order: TimingOrder, agora: number = agoraServidor()): string | null {
   if (order.channel !== '99food') return null
   if (order.status === 'delivered' || order.status === 'cancelled') return null
   const payload = order.external_payload

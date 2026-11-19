@@ -1,9 +1,10 @@
-import { memo, useState } from 'react'
-import { ChevronDown, ChevronUp, Printer, Clock, Phone, MapPin, MessageSquare, Store } from 'lucide-react'
+import { memo, useRef, useState } from 'react'
+import { ChevronDown, ChevronUp, Printer, Clock, Phone, MapPin, MessageSquare, Store, Bike, Loader2 } from 'lucide-react'
 import { Order, OrderStatus, STATUS_LABELS, PAYMENT_LABELS, fmtMoney, timeAgo , ehMarketplace, situacaoPagamento} from '../types'
 import { orderLabel } from '../orderLabel'
+import { useConfirmar } from './Confirmar'
 import { origemDoPedido, proximaEtapa } from '../orderFlow'
-import { horaLocal, iconeVeiculo, nivelUrgencia, preparoInfo, textoEntregador, textoEntregadorCurto, textoEntrega99Food, textoEntrega99FoodCurto } from '../orderTiming'
+import { horaLocal, nivelUrgencia, preparoInfo, textoEntregador, textoEntregadorCurto, textoEntrega99Food, textoEntrega99FoodCurto } from '../orderTiming'
 import canalIfood from '../assets/canais/canal-ifood.png'
 import canal99Food from '../assets/canais/canal-99food.png'
 import canalSite from '../assets/canais/canal-site.png'
@@ -69,10 +70,16 @@ interface Props {
    */
   agoraBucket: number
   compact?: boolean
+  /** Mudança de etapa deste pedido em andamento: o botão fica desabilitado com andamento. */
+  enviando?: boolean
 }
 
-function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraBucket, compact = false }: Props) {
+function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraBucket, compact = false, enviando = false }: Props) {
   const [open, setOpen] = useState(false)
+  const confirmar = useConfirmar()
+  // Trava local: entre o clique e a prop `enviando` chegar do App pode passar um
+  // ciclo de render, e dois toques seguidos avançariam duas etapas.
+  const cliqueEmCurso = useRef(false)
   const agora = agoraBucket * 15000
   const isIfood = order.channel === 'ifood'
   // Vale para qualquer marketplace; `isIfood` fica só para o que é do iFood.
@@ -139,11 +146,28 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
     ? (driver.estagio === 'na_loja' || (driver.pickupEtaMin != null && driver.pickupEtaMin <= 5))
     : (entrega99FoodCurto === 'na loja' || entrega99FoodCurto === 'chegou')
 
-  function handleCancel() {
+  function avancar(status: OrderStatus) {
+    if (enviando || cliqueEmCurso.current) return
+    cliqueEmCurso.current = true
+    onStatus(order.id, status)
+    window.setTimeout(() => { cliqueEmCurso.current = false }, 1500)
+  }
+
+  async function handleCancel() {
     // Todo marketplace (iFood, 99Food) cancela com motivo, pela mesma tela —
     // não é escolha nossa, é o que o servidor aceita (ver applyOrderStatusChange).
     if (doMarketplace) { onCancelIfood?.(order); return }
-    if (window.confirm('Cancelar este pedido?')) onStatus(order.id, 'cancelled')
+    const proprio = order.channel !== 'balcao'
+    const ok = await confirmar({
+      titulo: `Cancelar o pedido ${orderLabel(order)} de ${order.customer_name}?`,
+      descricao: proprio
+        ? 'O pedido sai da fila da cozinha. O cliente não é avisado automaticamente.'
+        : 'O pedido sai da fila da cozinha.',
+      confirmarRotulo: 'Cancelar pedido',
+      cancelarRotulo: 'Manter pedido',
+      perigo: true,
+    })
+    if (ok) onStatus(order.id, 'cancelled')
   }
 
   return (
@@ -192,7 +216,7 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
             </span>
             {precisaAceite && (
               <span className="text-[10px] px-2 py-0.5 rounded-sm font-black tracking-wide bg-amber-500 text-black animate-pulse">
-                ACEITAR
+                PENDENTE
               </span>
             )}
             {compact ? <CanalCompacto canal={order.channel} /> : (
@@ -213,7 +237,7 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
                   ? 'bg-amber-500/15 text-[var(--primary)]'
                   : 'border border-[var(--border)] text-[var(--text-muted)]'
               }`}>
-                {driver ? iconeVeiculo(driver.veiculo) : '🛵'}
+                <Bike size={11} aria-hidden />
                 {textoChipEntregador}
               </span>
             )}
@@ -262,13 +286,13 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
                   driver.estagio === 'na_loja' || (driver.pickupEtaMin != null && driver.pickupEtaMin <= 5)
                     ? 'text-[var(--primary)] font-bold' : 'text-[var(--text-muted)]'
                 }`}>
-                  <span>{iconeVeiculo(driver.veiculo)}</span>
+                  <Bike size={12} className="flex-shrink-0" aria-hidden />
                   <span className="truncate">{textoEntregador(driver)}</span>
                 </p>
               )}
               {entrega99Food && (
                 <p className="text-xs mt-0.5 flex items-center gap-1 text-[var(--text-muted)] truncate">
-                  <span>🛵</span>
+                  <Bike size={12} className="flex-shrink-0" aria-hidden />
                   <span className="truncate">{entrega99Food}</span>
                 </p>
               )}
@@ -289,15 +313,17 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
       {compact && !open && !isTerminal && proxima && (
         <div className="flex gap-1 px-2.5 pb-2.5">
           <button
-            onClick={() => onStatus(order.id, proxima.status)}
-            className="min-w-0 flex-1 truncate rounded-md bg-[var(--primary)] px-2 py-1.5 text-xs font-bold text-[var(--primary-fg)] transition-colors hover:bg-[var(--primary-hover)]"
+            onClick={() => avancar(proxima.status)}
+            disabled={enviando}
+            aria-label={proxima.label}
+            className="min-w-0 flex-1 truncate rounded-md bg-[var(--primary)] px-2 py-2 text-xs font-bold text-[var(--primary-fg)] transition-colors hover:bg-[var(--primary-hover)] disabled:opacity-60"
           >
-            {proxima.label}
+            {enviando ? <span className="flex items-center justify-center gap-1"><Loader2 size={12} className="animate-spin" /> Enviando…</span> : proxima.label}
           </button>
           <button
             onClick={() => { setOpen(true); onOpen?.(order.id) }}
             aria-label="Ver detalhes do pedido"
-            className="rounded-md border border-[var(--border)] px-2 text-[var(--text-muted)] hover:text-[var(--text)]"
+            className="min-w-9 flex items-center justify-center rounded-md border border-[var(--border)] px-2 text-[var(--text-muted)] hover:text-[var(--text)]"
           >
             <ChevronDown size={14} />
           </button>
@@ -335,13 +361,13 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
                   driver.estagio === 'na_loja' || (driver.pickupEtaMin != null && driver.pickupEtaMin <= 5)
                     ? 'text-[var(--primary)] font-bold' : 'text-[var(--text-muted)]'
                 }`}>
-                  <span>{iconeVeiculo(driver.veiculo)}</span>
+                  <Bike size={12} className="flex-shrink-0" aria-hidden />
                   <span>{textoEntregador(driver)}</span>
                 </span>
               )}
               {entrega99Food && (
                 <span className="flex items-center gap-1 text-[var(--text-muted)]">
-                  <span>🛵</span>
+                  <Bike size={12} className="flex-shrink-0" aria-hidden />
                   <span>{entrega99Food}</span>
                 </span>
               )}
@@ -412,27 +438,31 @@ function OrderCardImpl({ order, onStatus, onPrint, onCancelIfood, onOpen, agoraB
           <div className="space-y-2">
             {proxima && (
               <button
-                onClick={() => onStatus(order.id, proxima.status)}
-                className="w-full text-sm font-bold py-2.5 px-3 rounded-lg bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-[var(--primary-fg)] transition-colors"
+                onClick={() => avancar(proxima.status)}
+                disabled={enviando}
+                aria-label={proxima.label}
+                className="w-full text-sm font-bold py-3 px-3 rounded-lg bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-[var(--primary-fg)] transition-colors disabled:opacity-60"
               >
-                {proxima.label}
+                {enviando ? <span className="flex items-center justify-center gap-1.5"><Loader2 size={14} className="animate-spin" /> Enviando…</span> : proxima.label}
               </button>
             )}
-            {isIfood && order.status === 'out_for_delivery' && (
-              <p className="text-[10px] text-[var(--text-muted)] text-center">O iFood conclui quando o entregador finalizar.</p>
+            {doMarketplace && order.status === 'out_for_delivery' && (
+              <p className="text-[11px] text-[var(--text-muted)] text-center">O {origem.label} conclui quando o entregador finalizar.</p>
             )}
             <div className="flex items-center gap-2">
               {!isTerminal && (
                 <button
-                  onClick={handleCancel}
-                  className="text-[11px] px-2.5 py-1.5 rounded-lg border border-[var(--border)] text-[var(--text-muted)] hover:border-red-500 hover:text-[var(--danger)] transition-colors"
+                  onClick={() => void handleCancel()}
+                  aria-label="Cancelar pedido"
+                  className="min-h-10 text-xs px-3 py-2 rounded-lg border border-[var(--border)] text-[var(--text-muted)] hover:border-red-500 hover:text-[var(--danger)] transition-colors"
                 >
-                  Cancelar
+                  Cancelar pedido
                 </button>
               )}
               <button
                 onClick={() => onPrint(order)}
-                className="flex items-center gap-1 text-[11px] px-2.5 py-1.5 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] text-[var(--text-muted)] transition-colors ml-auto"
+                aria-label="Imprimir comanda"
+                className="flex items-center gap-1 min-h-10 text-xs px-3 py-2 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] text-[var(--text-muted)] transition-colors ml-auto"
               >
                 <Printer size={11} /> Imprimir
               </button>
@@ -457,17 +487,18 @@ const CANAIS: Partial<Record<Order['channel'], { src: string; alt: string; largu
   ifood: { src: canalIfood, alt: 'iFood', largura: 28 },
   '99food': { src: canal99Food, alt: '99Food', largura: 34 },
   whatsapp: { src: canalWhatsapp, alt: 'WhatsApp', largura: 15 },
-  web: { src: canalSite, alt: 'Cardápio', largura: 15 },
+  web: { src: canalSite, alt: 'Site', largura: 15 },
 }
 
 function CanalCompacto({ canal }: { canal: Order['channel'] }) {
   const item = CANAIS[canal]
   if (!item) {
-    return <span className="flex h-5 items-center rounded-sm border border-[var(--border)] bg-white px-1.5" title="Balcão">
+    return <span className="flex h-5 items-center rounded-sm border border-[var(--border)] bg-white px-1.5" role="img" aria-label="Balcão">
       <Store size={12} className="text-[var(--text-muted)]" />
+      <span className="sr-only">Balcão</span>
     </span>
   }
-  return <span className="flex h-5 items-center rounded-sm border border-[var(--border)] bg-white px-1.5" title={item.alt}>
+  return <span className="flex h-5 items-center rounded-sm border border-[var(--border)] bg-white px-1.5">
     <img src={item.src} alt={item.alt} width={item.largura} className="max-h-3.5 object-contain" />
   </span>
 }

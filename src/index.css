@@ -38,3 +38,26 @@ body {
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
+/* ── Tablet Android ─────────────────────────────────────────────────────────
+   Sem mouse não há hover e o dedo precisa de alvo grande. A classe
+   `plataforma-android` é posta no <html> pela entrada do Android. */
+html.plataforma-android { font-size: 18px; }
+
+html.plataforma-android button,
+html.plataforma-android select,
+html.plataforma-android [role="button"] {
+  min-height: 44px;
+}
+
+html.plataforma-android button:has(> svg:only-child) {
+  min-width: 44px;
+}
+
+/* Selos e chips pequenos demais para ler a um braço de distância. */
+html.plataforma-android .text-\[9px\],
+html.plataforma-android .text-\[10px\],
+html.plataforma-android .text-\[11px\] {
+  font-size: 0.8rem;
+  line-height: 1.2;
+}

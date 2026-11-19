@@ -91,11 +91,11 @@ export interface Order {
 
 export const STATUS_LABELS: Record<OrderStatus, string> = {
   pending:          'Pendente',
-  awaiting_payment: 'Aguardando pag.',
+  awaiting_payment: 'Aguardando pagamento',
   paid:             'Pago',
   preparing:        'Preparando',
   ready_to_pickup:  'Pronto',
-  out_for_delivery: 'Saiu p/ entrega',
+  out_for_delivery: 'Saiu para entrega',
   delivered:        'Entregue',
   cancelled:        'Cancelado',
 }
@@ -116,10 +116,11 @@ export const PAYMENT_LABELS: Record<string, string> = {
  * ao PDV depois de pago. O card precisa dizer isso — a forma sozinha ("Pix",
  * "Dinheiro") não responde "esse pedido já foi pago?".
  */
-export function situacaoPagamento(order: Pick<Order, 'payment_method' | 'card_on_delivery' | 'status'>): { texto: string; cobrar: boolean } {
+export function situacaoPagamento(order: Pick<Order, 'payment_method' | 'card_on_delivery' | 'status'> & { fulfillment_type?: FulfillmentType | null }): { texto: string; cobrar: boolean } {
   if (order.status === 'awaiting_payment') return { texto: 'Aguardando pagamento', cobrar: false }
   const naPorta = ['cash', 'meal_voucher', 'food_voucher'].includes(order.payment_method) || order.card_on_delivery === true
-  return naPorta ? { texto: 'Cobrar na entrega', cobrar: true } : { texto: 'Pago', cobrar: false }
+  if (!naPorta) return { texto: 'Pago', cobrar: false }
+  return { texto: order.fulfillment_type === 'pickup' ? 'Cobrar na retirada' : 'Cobrar na entrega', cobrar: true }
 }
 
 export const KANBAN_COLUMNS: { id: string; label: string; statuses: OrderStatus[]; accent: string }[] = [
@@ -132,7 +133,7 @@ export const KANBAN_COLUMNS: { id: string; label: string; statuses: OrderStatus[
   // Pago aprovar. Mantemos o tipo para que pedidos antigos sigam legíveis no histórico.
   { id: 'prep',     label: 'Em preparo', statuses: ['pending','paid','preparing'], accent: '#3b82f6' },
   { id: 'ready',    label: 'Pronto',     statuses: ['ready_to_pickup'],            accent: '#14b8a6' },
-  { id: 'delivery', label: 'Na entrega', statuses: ['out_for_delivery'],           accent: '#a855f7' },
+  { id: 'delivery', label: 'Saiu para entrega', statuses: ['out_for_delivery'],           accent: '#a855f7' },
   { id: 'done',     label: 'Concluído',  statuses: ['delivered','cancelled'],      accent: '#6b7280' },
 ]
 

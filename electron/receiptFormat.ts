@@ -34,5 +34,8 @@ export function origemLabel(channel: string | null | undefined): string {
   if (channel === 'ifood') return 'IFOOD'
   if (channel === '99food') return '99FOOD'
   if (channel === 'whatsapp') return 'WHATSAPP'
+  // Pedido montado no balcão não é pedido do site: a cozinha lê esta linha para
+  // saber de onde veio e para quem entregar.
+  if (channel === 'balcao') return 'BALCAO'
   return 'SITE'
 }

@@ -13,36 +13,93 @@ import { pastaDoLog, registrar } from './log'
 // Supabase e de um script que não existem mais — descrição de um jeito antigo
 // de publicar, mantida por descuido.
 //
-// Nunca baixa nem instala sem perguntar: quem está no balcão pode estar no meio
-// do movimento, e reiniciar o programa sozinho perderia a tela de pedidos.
+// Nunca baixa sem perguntar, e nunca interrompe a cozinha: enquanto houver pedido
+// em preparo na última lista, o diálogo espera (ver abrirQuandoDerParaInterromper).
+// `autoInstallOnAppQuit` fica ligado porque só instala o que a pessoa JÁ mandou
+// baixar (autoDownload é falso) — é o que faz "Instalar ao fechar o app" valer,
+// inclusive quando o diálogo é fechado sem escolher.
 autoUpdater.autoDownload = false
-autoUpdater.autoInstallOnAppQuit = false
+autoUpdater.autoInstallOnAppQuit = true
+
+const UM_DIA_MS = 24 * 60 * 60 * 1000
+
+/** Diálogo de atualização adiado porque a cozinha está com pedido em preparo. */
+let dialogoAtualizacaoPendente: (() => void) | null = null
+
+/** Pedido ainda em andamento na cozinha, segundo a última lista do vigia. */
+function haPedidoEmPreparo(): boolean {
+  return ultimaListaOperacional.some((p) => ['pending', 'paid', 'preparing'].includes(String(p.status)))
+}
+
+function abrirQuandoDerParaInterromper(abrir: () => void) {
+  if (haPedidoEmPreparo()) {
+    dialogoAtualizacaoPendente = abrir
+    return
+  }
+  dialogoAtualizacaoPendente = null
+  abrir()
+}
+
+/** Chamado a cada ciclo do vigia: abre o diálogo adiado assim que a fila esvaziar. */
+function tentarDialogoAtualizacaoPendente() {
+  if (!dialogoAtualizacaoPendente || haPedidoEmPreparo()) return
+  const abrir = dialogoAtualizacaoPendente
+  dialogoAtualizacaoPendente = null
+  abrir()
+}
 
 autoUpdater.on('update-available', (info) => {
-  if (!mainWindow) return
-  void dialog.showMessageBox(mainWindow, {
-    type: 'info',
-    title: 'Atualização disponível',
-    message: `Uma nova versão (${info.version}) do Cardapia está disponível.`,
-    detail: 'Deseja baixar e instalar agora? Isso reinicia o app.',
-    buttons: ['Atualizar agora', 'Mais tarde'],
-    defaultId: 0,
-    cancelId: 1,
-  }).then((result) => {
-    if (result.response === 0) void autoUpdater.downloadUpdate()
-  })
+  // Checagem pedida no menu sempre responde; a automática não repete o modal
+  // mais de uma vez por dia (ela roda a cada 4 h e "Mais tarde" voltava no pico).
+  const manual = verificacaoManual
+  verificacaoManual = false
+  if (!manual) {
+    const ultimo = Number(loadConfig().ultimoAvisoAtualizacao ?? 0)
+    if (Date.now() - ultimo < UM_DIA_MS) return
+  }
+
+  const abrir = () => {
+    if (!mainWindow) return
+    try {
+      saveConfig({ ...loadConfig(), ultimoAvisoAtualizacao: String(Date.now()) })
+    } catch { /* ignore */ }
+    void dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'Atualização disponível',
+      message: `A versão ${info.version} do Cardapia está disponível.`,
+      detail: 'O download acontece em segundo plano e a tela de pedidos continua funcionando. Depois de baixar, você escolhe quando instalar.',
+      buttons: ['Baixar agora', 'Mais tarde'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    }).then((result) => {
+      if (result.response === 0) void autoUpdater.downloadUpdate()
+    })
+  }
+
+  if (manual) abrir()
+  else abrirQuandoDerParaInterromper(abrir)
 })
 
 autoUpdater.on('update-downloaded', (info) => {
-  if (!mainWindow) return
-  void dialog.showMessageBox(mainWindow, {
-    type: 'info',
-    title: 'Atualização pronta',
-    message: `Versão ${info.version} baixada. O app vai reiniciar para instalar.`,
-    buttons: ['Reiniciar agora'],
-  }).then(() => {
-    isQuitting = true
-    autoUpdater.quitAndInstall()
+  abrirQuandoDerParaInterromper(() => {
+    if (!mainWindow) return
+    void dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'Atualização pronta',
+      message: `A versão ${info.version} foi baixada.`,
+      detail: 'Reiniciar agora leva alguns segundos e fecha a tela de pedidos. Instalar ao fechar o app deixa para quando você sair pela bandeja (Sair do Cardapia).',
+      buttons: ['Reiniciar agora', 'Instalar ao fechar o app'],
+      // Fechar o diálogo (Esc, X) cai no botão seguro: não reinicia.
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    }).then((result) => {
+      if (result.response === 0) {
+        isQuitting = true
+        autoUpdater.quitAndInstall()
+      }
+    })
   })
 })
 
@@ -382,9 +439,14 @@ async function parearPorCodigo(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code }),
+      signal: AbortSignal.timeout(TEMPO_ACOES_MS),
     })
-  } catch {
-    return { erro: 'Não foi possível falar com o servidor. Confira a internet.' }
+  } catch (e) {
+    return {
+      erro: ehTempoLimite(e)
+        ? mensagemDeTempoLimite(TEMPO_ACOES_MS)
+        : 'Não foi possível falar com o servidor. Confira a internet.',
+    }
   }
 
   const dados = (await resposta.json().catch(() => null)) as
@@ -408,10 +470,124 @@ function removerConexao(id: string) {
   for (const chave of [...cacheEtagPedidos.keys()]) {
     if (chave.startsWith(`${id}:`)) cacheEtagPedidos.delete(chave)
   }
+  estadoDasConexoes.delete(id)
 }
 
 function getDesktopConnection() {
   return getConnection()
+}
+
+// ── Contratos com a interface (ver regras-app.md) ─────────────────────────
+type EstadoConexao = 'ok' | 'sem_rede' | 'nao_autorizado' | 'erro_servidor'
+
+interface SaudeApp {
+  conexoes: { connectionId: string; label: string; estado: EstadoConexao; ultimoSucessoEm: number | null }[]
+  /** Relógio do servidor menos o deste aparelho, em ms; 0 se desconhecido. */
+  diferencaRelogioMs: number
+  /** Impressão automática ligada sem impressora escolhida. */
+  autoPrintSemImpressora: boolean
+}
+
+interface FalhaImpressao {
+  orderId: string
+  rotulo: string
+  motivo: string
+  viasQueFaltaram: number
+}
+
+// ── Requisições com tempo-limite ───────────────────────────────────────────
+// Sem tempo-limite uma conexão pendurada segurava a trava `vigiaEmAndamento` e
+// parava TODOS os ciclos — o balcão deixava de receber pedido sem aviso.
+const TEMPO_ACOES_MS = 15_000
+const TEMPO_VIGIA_MS = 10_000
+
+/** Falha ao falar com o servidor, já classificada para o painel de saúde. */
+class FalhaServidor extends Error {
+  estado: Exclude<EstadoConexao, 'ok'>
+  status?: number
+  constructor(message: string, estado: Exclude<EstadoConexao, 'ok'>, status?: number) {
+    super(message)
+    this.estado = estado
+    this.status = status
+  }
+}
+
+function estadoPorStatus(status: number): Exclude<EstadoConexao, 'ok'> {
+  // 401/403: o servidor não reconhece mais este aparelho (desligado no painel).
+  if (status === 401 || status === 403) return 'nao_autorizado'
+  return 'erro_servidor'
+}
+
+function ehTempoLimite(e: unknown): boolean {
+  return e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError')
+}
+
+function mensagemDeTempoLimite(ms: number): string {
+  return `Sem resposta do servidor em ${Math.round(ms / 1000)} s`
+}
+
+// ── Relógio do servidor ────────────────────────────────────────────────────
+// O filtro de "pedido recente" compara created_at (hora do servidor) com a hora
+// do PC. Com o PC adiantado mais de 20 min, nenhum pedido novo imprimia. A
+// diferença vem do header Date de cada resposta; a mediana das últimas amostras
+// aguenta uma resposta atrasada sem oscilar.
+const amostrasRelogio: number[] = []
+const FOLGA_RELOGIO_MS = 5_000
+
+function registrarRelogio(response: Response) {
+  const cabecalho = response.headers.get('date')
+  if (!cabecalho) return
+  const servidor = Date.parse(cabecalho)
+  if (!Number.isFinite(servidor)) return
+  amostrasRelogio.push(servidor - Date.now())
+  if (amostrasRelogio.length > 7) amostrasRelogio.shift()
+}
+
+function diferencaRelogioMs(): number {
+  if (amostrasRelogio.length === 0) return 0
+  const ordenadas = [...amostrasRelogio].sort((a, b) => a - b)
+  const mediana = ordenadas[Math.floor(ordenadas.length / 2)]
+  // O header Date só tem precisão de segundo e a resposta leva um tempo para
+  // chegar: abaixo disto é ruído, não relógio errado.
+  return Math.abs(mediana) < FOLGA_RELOGIO_MS ? 0 : mediana
+}
+
+/** "Agora" na hora do servidor. Usar nas comparações com created_at. */
+function agora(): number {
+  return Date.now() + diferencaRelogioMs()
+}
+
+async function fetchComTempo(url: string, init: RequestInit, ms: number): Promise<Response> {
+  try {
+    const response = await fetch(url, { ...init, signal: AbortSignal.timeout(ms) })
+    registrarRelogio(response)
+    return response
+  } catch (e) {
+    if (ehTempoLimite(e)) throw new FalhaServidor(mensagemDeTempoLimite(ms), 'sem_rede')
+    throw new FalhaServidor('Sem conexão com o servidor. Confira a internet.', 'sem_rede')
+  }
+}
+
+/**
+ * Lê o corpo como JSON. Corpo cortado no meio (conexão caiu, tempo esgotou) é
+ * ERRO, e não "corpo vazio": tratar como vazio fazia o vigia enxergar uma lista
+ * de pedidos vazia.
+ */
+async function lerCorpoJson(response: Response, ms: number): Promise<unknown> {
+  let texto: string
+  try {
+    texto = await response.text()
+  } catch (e) {
+    throw new FalhaServidor(
+      ehTempoLimite(e) ? mensagemDeTempoLimite(ms) : 'A conexão com o servidor caiu no meio da resposta',
+      'sem_rede'
+    )
+  }
+  try {
+    return JSON.parse(texto)
+  } catch {
+    return null
+  }
 }
 
 async function desktopRequest<T>(
@@ -420,20 +596,20 @@ async function desktopRequest<T>(
   connectionId?: string
 ): Promise<T> {
   const connection = getConnection(connectionId)
-  if (!connection) throw new Error('Configure a URL e o código da loja')
+  if (!connection) throw new Error('Ligue este computador a uma loja em Configurações')
 
   const headers = new Headers(init.headers)
   headers.set('Authorization', `Bearer ${connection.desktopApiKey}`)
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
 
-  const response = await fetch(`${connection.apiBaseUrl}${path}`, { ...init, headers })
-  const payload = await response.json().catch(() => null) as { error?: string } | T | null
+  const response = await fetchComTempo(`${connection.apiBaseUrl}${path}`, { ...init, headers }, TEMPO_ACOES_MS)
+  const payload = await lerCorpoJson(response, TEMPO_ACOES_MS) as { error?: string } | T | null
 
   if (!response.ok) {
     const message = payload && typeof payload === 'object' && 'error' in payload
       ? String(payload.error)
       : `Servidor respondeu ${response.status}`
-    throw new Error(message)
+    throw new FalhaServidor(message, estadoPorStatus(response.status), response.status)
   }
 
   return payload as T
@@ -571,16 +747,65 @@ async function reportarDiagnostico() {
   )
 }
 
+type ResultadoImpressao = { ok: true } | { ok: false; error: string }
+
+/**
+ * Avisa que uma comanda NÃO saiu (ou pode não ter saído). Dois caminhos além do
+ * log: o evento estruturado `falha-impressao` para a tela (que decide como
+ * mostrar e por quanto tempo) e, com a janela fora de foco, uma notificação do
+ * Windows — quem está na chapa não está olhando o app, e o aviso que some em 6 s
+ * dentro dele passava despercebido.
+ */
+function avisarFalhaImpressao(
+  order: Record<string, unknown>,
+  motivo: string,
+  viasQueFaltaram: number,
+  semConfirmacao: boolean
+) {
+  const rotulo = orderLabel(order as never)
+  const falha: FalhaImpressao = {
+    orderId: String(order.id ?? ''),
+    rotulo,
+    motivo,
+    viasQueFaltaram,
+  }
+  mainWindow?.webContents.send('falha-impressao', falha)
+
+  if (!(mainWindow?.isFocused() ?? false)) {
+    try {
+      new Notification({
+        title: semConfirmacao
+          ? `Confira se a comanda do pedido #${rotulo} saiu`
+          : `A comanda do pedido #${rotulo} não saiu`,
+        body: motivo,
+        silent: false,
+      }).show()
+    } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Imprime `vias` comandas. Devolve o resultado REAL: ok só quando todas as vias
+ * saíram confirmadas. Na primeira que falha, para — impressora que não
+ * responde não vai responder à via seguinte, e seguir só empilharia avisos.
+ *
+ * `origem` 'auto' (vigia) também manda o aviso antigo `print-error`; 'manual'
+ * (reimpressão no cartão) não, porque quem clicou recebe o erro no retorno e o
+ * aviso dobraria na tela.
+ */
 async function autoPrintOrder(
   order: Record<string, unknown>,
   printerName: string,
   widthCols: 32 | 48,
   vias = 1,
-  includeReadyQr = false
-) {
+  includeReadyQr = false,
+  origem: 'auto' | 'manual' = 'auto'
+): Promise<ResultadoImpressao> {
   const pedido = `#${orderLabel(order as never)}`
 
   for (let i = 0; i < vias; i += 1) {
+    const faltam = vias - i
+    const sufixoVias = vias > 1 ? ` Faltaram ${faltam} de ${vias} vias.` : ''
     try {
       await printRawEscPos(buildReceiptEscPos(order, widthCols, includeReadyQr), printerName)
       ultimoCaminhoReportado = ultimoCaminhoDeImpressao() ?? ultimoCaminhoReportado
@@ -592,11 +817,15 @@ async function autoPrintOrder(
         registrar('erro', `Impressão sem confirmação do pedido ${pedido}`, escposError)
         registrarFalhaImpressao()
         // Aqui o lojista PRECISA agir: pode não ter saído papel nenhum.
-        mainWindow?.webContents.send(
-          'print-error',
-          `Confira se a comanda do pedido ${pedido} saiu. Se não saiu, use Imprimir no cartão.`
-        )
-        return
+        if (origem === 'auto') {
+          mainWindow?.webContents.send(
+            'print-error',
+            `Confira se a comanda do pedido ${pedido} saiu. Se não saiu, use Imprimir no cartão.${sufixoVias}`
+          )
+        }
+        const motivo = `A comanda pode não ter saído · a impressora ${printerName} não confirmou. Confira o papel; se faltou, reimprima pelo cartão do pedido.`
+        avisarFalhaImpressao(order, motivo, faltam, true)
+        return { ok: false, error: motivo }
       }
 
       // A reserva imprime um cupom IDÊNTICO ao do ESC/POS, então a comanda sai
@@ -613,13 +842,20 @@ async function autoPrintOrder(
         registrar('erro', `Reserva em HTML também falhou no pedido ${pedido}`, htmlError)
         registrarFalhaImpressao()
         ultimoCaminhoReportado = 'falhou'
-        mainWindow?.webContents.send(
-          'print-error',
-          `A comanda do pedido ${pedido} não saiu. Use Imprimir no cartão do pedido.`
-        )
+        if (origem === 'auto') {
+          mainWindow?.webContents.send(
+            'print-error',
+            `A comanda do pedido ${pedido} não saiu. Use Imprimir no cartão do pedido.${sufixoVias}`
+          )
+        }
+        const motivo = `A comanda não saiu · a impressora ${printerName} não respondeu. Confira se está ligada e com papel.`
+        avisarFalhaImpressao(order, motivo, faltam, false)
+        return { ok: false, error: motivo }
       }
     }
   }
+
+  return { ok: true }
 }
 
 // ── IPC Handlers ──────────────────────────────────────────────────────────
@@ -643,6 +879,8 @@ ipcMain.handle('save-config', (_e, input: DesktopConfigInput) => {
   try {
     app.setLoginItemSettings({ openAtLogin: config.autoStart === 'true', path: app.getPath('exe') })
   } catch { /* ignore — can fail in dev/unpacked builds */ }
+  // A escolha da impressora muda `autoPrintSemImpressora` na hora, sem esperar o ciclo.
+  if (haEstadoDeSaude) emitirSaude()
   return true
 })
 
@@ -661,28 +899,33 @@ ipcMain.handle('get-printers', async () => {
   return list
 })
 
-ipcMain.handle('print-order', async (_e, order: Record<string, unknown>, includeReadyQr?: boolean) => {
+ipcMain.handle('print-order', async (_e, order: Record<string, unknown>, includeReadyQr?: boolean): Promise<ResultadoImpressao> => {
   const cfg = loadConfig()
-  if (!cfg.printerName) return 'no-printer'
+  if (!cfg.printerName) {
+    const motivo = 'A comanda não saiu · nenhuma impressora escolhida. Escolha a impressora em Configurações.'
+    avisarFalhaImpressao(order, motivo, 1, false)
+    return { ok: false, error: motivo }
+  }
   const widthCols = cfg.printerWidth === '80' ? 48 : 32
   try {
     // Reimpressão pedida no cartão sai com UMA via de propósito: quem clica
     // quer a comanda que faltou, não outro par delas.
-    await autoPrintOrder(
+    return await autoPrintOrder(
       order,
       cfg.printerName,
       widthCols,
       1,
-      includeReadyQr ?? cfg.scannerReady === 'true'
+      includeReadyQr ?? cfg.scannerReady === 'true',
+      'manual'
     )
-    return 'ok'
   } catch (error) {
-    // autoPrintOrder já trata (e avisa) as falhas de impressão que conhece; o
-    // que chega aqui é o inesperado. O motivo vai para o log e a tela recebe a
-    // única coisa acionável: tentar de novo.
+    // autoPrintOrder já trata as falhas de impressão que conhece; o que chega
+    // aqui é o inesperado. O motivo vai para o log e a tela recebe a única
+    // coisa acionável: tentar de novo.
     registrar('erro', 'Falha inesperada ao reimprimir pelo cartão', error)
-    mainWindow?.webContents.send('print-error', 'Não foi possível imprimir. Tente de novo.')
-    return 'error'
+    const motivo = 'A comanda não saiu · algo deu errado ao imprimir. Tente de novo.'
+    avisarFalhaImpressao(order, motivo, 1, false)
+    return { ok: false, error: motivo }
   }
 })
 
@@ -720,17 +963,17 @@ async function buscarPedidosComEtag(
   const headers = new Headers({ Authorization: `Bearer ${conexao.desktopApiKey}` })
   if (cache) headers.set('If-None-Match', cache.etag)
 
-  const response = await fetch(`${conexao.apiBaseUrl}${caminho}`, { headers })
+  const response = await fetchComTempo(`${conexao.apiBaseUrl}${caminho}`, { headers }, TEMPO_VIGIA_MS)
 
   if (response.status === 304 && cache) return cache.pedidos
 
-  const payload = await response.json().catch(() => null) as { error?: string } | Record<string, unknown>[] | null
+  const payload = await lerCorpoJson(response, TEMPO_VIGIA_MS) as { error?: string } | Record<string, unknown>[] | null
 
   if (!response.ok) {
     const message = payload && typeof payload === 'object' && !Array.isArray(payload) && 'error' in payload
       ? String(payload.error)
       : `Servidor respondeu ${response.status}`
-    throw new Error(message)
+    throw new FalhaServidor(message, estadoPorStatus(response.status), response.status)
   }
 
   const pedidos = (payload ?? []) as Record<string, unknown>[]
@@ -760,7 +1003,7 @@ async function buscarPedidosComEtag(
  */
 async function buscarComStatusPorConexao(caminho: string): Promise<BuscaResultado> {
   const conexoes = getConnections()
-  if (conexoes.length === 0) throw new Error('Configure a URL e o código da loja')
+  if (conexoes.length === 0) throw new Error('Ligue este computador a uma loja em Configurações')
 
   // A etiqueta só faz sentido com mais de uma loja: com uma, ela apareceria
   // idêntica em todo cartão sem informar nada.
@@ -780,10 +1023,18 @@ async function buscarComStatusPorConexao(caminho: string): Promise<BuscaResultad
   const juntos: Record<string, unknown>[] = []
   const conexoesOk = new Set<string>()
   resultados.forEach((r, i) => {
+    const anterior = estadoDasConexoes.get(conexoes[i].id)
     if (r.status === 'fulfilled') {
       juntos.push(...(r.value as Record<string, unknown>[]))
       conexoesOk.add(conexoes[i].id)
+      estadoDasConexoes.set(conexoes[i].id, { estado: 'ok', ultimoSucessoEm: Date.now() })
     } else {
+      // Erro que não veio de FalhaServidor não passou pela rede: tratar como
+      // rede mantém o aviso honesto ("sem conexão") em vez de inventar um motivo.
+      estadoDasConexoes.set(conexoes[i].id, {
+        estado: r.reason instanceof FalhaServidor ? r.reason.estado : 'sem_rede',
+        ultimoSucessoEm: anterior?.ultimoSucessoEm ?? null,
+      })
       console.error(`Loja ${conexoes[i].label || conexoes[i].id} indisponível:`, r.reason)
     }
   })
@@ -851,6 +1102,87 @@ const pedidosVistosMain = new Map<string, Set<string>>()
 let primeiraVarreduraMain = true
 const NOVO_PEDIDO_RECENTE_MS = 20 * 60 * 1000
 
+/** Última lista operacional recebida — o diálogo de atualização consulta para não interromper a cozinha. */
+let ultimaListaOperacional: Record<string, unknown>[] = []
+
+// ── Saúde das conexões ────────────────────────────────────────────────────
+// Estado por loja, atualizado a cada busca de pedidos. Sem isto, quando TODAS
+// as lojas falhavam o vigia só dava `return`: a tela ficava parada, com a
+// última lista, e ninguém sabia que o balcão estava cego.
+const estadoDasConexoes = new Map<string, { estado: EstadoConexao; ultimoSucessoEm: number | null }>()
+let haEstadoDeSaude = false
+
+function montarSaude(): SaudeApp {
+  const cfg = loadConfig()
+  const conexoes: SaudeApp['conexoes'] = []
+  for (const c of getConnections()) {
+    const e = estadoDasConexoes.get(c.id)
+    if (!e) continue // ainda não houve busca desta loja
+    conexoes.push({ connectionId: c.id, label: c.label || 'Loja', estado: e.estado, ultimoSucessoEm: e.ultimoSucessoEm })
+  }
+  return {
+    conexoes,
+    diferencaRelogioMs: diferencaRelogioMs(),
+    // Impressão automática ligada (o padrão é ligada) sem impressora: o vigia
+    // pula a comanda em silêncio, então a tela precisa saber.
+    autoPrintSemImpressora: cfg.autoPrint !== 'false' && !cfg.printerName,
+  }
+}
+
+function emitirSaude() {
+  haEstadoDeSaude = true
+  mainWindow?.webContents.send('saude-app', montarSaude())
+}
+
+ipcMain.on('saude-assinou', (e) => {
+  if (haEstadoDeSaude) e.sender.send('saude-app', montarSaude())
+})
+
+// ── Registro de pedidos já avisados (em disco) ────────────────────────────
+// A primeira varredura de cada execução marcava tudo como visto: pedido que
+// chegava com o app fechado ou reiniciando nunca imprimia nem tocava. O registro
+// guarda o que já foi avisado/impresso; o que não está nele, ainda não foi
+// reconhecido por ninguém e é recente, é tratado como novo.
+//
+// Formato de pedidos-avisados.json (em userData):
+//   { "versao": 1, "ids": { "<orderId>": <ms epoch, hora do servidor, de quando foi registrado> } }
+// Ids com mais de 48 h saem a cada gravação. Arquivo ausente = primeiríssima
+// execução (silenciosa); arquivo ilegível é tratado igual, para nunca imprimir
+// o histórico todo por causa de um arquivo corrompido.
+const REGISTRO_AVISADOS_PATH = join(app.getPath('userData'), 'pedidos-avisados.json')
+const REGISTRO_VALIDADE_MS = 48 * 60 * 60 * 1000
+
+let registroAvisados: Map<string, number> | null = null
+let registroExistiaAoIniciar = false
+
+function carregarRegistroAvisados(): Map<string, number> {
+  if (registroAvisados) return registroAvisados
+  registroAvisados = new Map()
+  try {
+    if (existsSync(REGISTRO_AVISADOS_PATH)) {
+      const dados = JSON.parse(readFileSync(REGISTRO_AVISADOS_PATH, 'utf-8')) as { ids?: Record<string, number> }
+      for (const [id, ts] of Object.entries(dados.ids ?? {})) {
+        if (typeof ts === 'number') registroAvisados.set(id, ts)
+      }
+      registroExistiaAoIniciar = true
+    }
+  } catch (err) {
+    registrar('erro', 'Registro de pedidos avisados ilegível; começando de novo, sem reimprimir', err)
+  }
+  return registroAvisados
+}
+
+function salvarRegistroAvisados() {
+  const registro = carregarRegistroAvisados()
+  const limite = agora() - REGISTRO_VALIDADE_MS
+  for (const [id, ts] of registro) if (ts < limite) registro.delete(id)
+  try {
+    writeFileSync(REGISTRO_AVISADOS_PATH, JSON.stringify({ versao: 1, ids: Object.fromEntries(registro) }))
+  } catch (err) {
+    registrar('erro', 'Não foi possível gravar o registro de pedidos avisados', err)
+  }
+}
+
 // ── Ritmo do vigia ────────────────────────────────────────────────────────
 // Fixo em 7s: o app da cozinha precisa mostrar o pedido com baixa latência
 // mesmo depois de uma madrugada ou período longo sem movimento.
@@ -871,6 +1203,7 @@ function agendarVigiaDePedidos() {
       } finally {
         vigiaEmAndamento = false
       }
+      tentarDialogoAtualizacaoPendente()
     }
     agendarVigiaDePedidos()
   }, INTERVALO_VIGIA_MS)
@@ -890,6 +1223,15 @@ function deveImprimirCanal(channel: string, filtro: string): boolean {
 }
 
 async function vigiarPedidosNovos() {
+  try {
+    await varrerPedidos()
+  } finally {
+    // A cada ciclo, com sucesso ou não: é o "silêncio" que a tela precisa ver.
+    emitirSaude()
+  }
+}
+
+async function varrerPedidos() {
   let resultado: BuscaResultado
   try {
     resultado = await buscarComStatusPorConexao('/api/desktop/orders')
@@ -899,12 +1241,42 @@ async function vigiarPedidosNovos() {
   const pedidos = resultado.pedidos
 
   const operacionais = pedidos.filter((p) => p.status !== 'awaiting_payment')
+  ultimaListaOperacional = operacionais
+
+  const agoraMs = agora()
+  const avisados = carregarRegistroAvisados()
+  const primeiraExecucaoDaVida = !registroExistiaAoIniciar
+
   const novos = primeiraVarreduraMain
-    ? []
+    // Na primeira varredura só vale o que o registro nunca viu, que ninguém
+    // reconheceu e que chegou há pouco — pedido que entrou com o app fechado.
+    // Sem registro (primeiríssima execução) fica silencioso como sempre foi.
+    ? primeiraExecucaoDaVida
+      ? []
+      : operacionais.filter((p) => {
+          const criado = Date.parse(String(p.created_at))
+          return !avisados.has(String(p.id))
+            && !p.acknowledged_at
+            && Number.isFinite(criado)
+            && agoraMs - criado <= NOVO_PEDIDO_RECENTE_MS
+        })
     : operacionais.filter((p) => {
         const vistosDaConexao = pedidosVistosMain.get(String(p.connectionId ?? ''))
-        return !vistosDaConexao?.has(p.id as string)
+        return !vistosDaConexao?.has(p.id as string) && !avisados.has(String(p.id))
       })
+
+  // Grava ANTES de imprimir: se o app cair no meio da comanda, o pior caso é
+  // uma comanda a menos (reimprime pelo cartão), nunca uma a mais a cada
+  // reinício — e atualização do app reinicia o processo.
+  let registroMudou = primeiraExecucaoDaVida
+  for (const p of operacionais) {
+    const id = String(p.id)
+    if (!avisados.has(id)) {
+      avisados.set(id, agoraMs)
+      registroMudou = true
+    }
+  }
+  if (registroMudou) salvarRegistroAvisados()
 
   // Só reconstrói o "visto" das conexões que responderam AGORA — a de quem
   // ficou fora do ar neste ciclo mantém o que já sabíamos dela.
@@ -933,7 +1305,8 @@ async function vigiarPedidosNovos() {
 
   for (const p of novos) {
     // Um pedido que só "apareceu" na lista mas é de horas atrás não é novo.
-    if (Date.now() - new Date(p.created_at as string).getTime() > NOVO_PEDIDO_RECENTE_MS) continue
+    // Pela hora do servidor: com o relógio do PC adiantado, nada era "recente".
+    if (agoraMs - new Date(p.created_at as string).getTime() > NOVO_PEDIDO_RECENTE_MS) continue
 
     const canal = String(p.channel ?? 'web')
     const origem = canal === 'ifood' ? ' iFood'
@@ -961,7 +1334,8 @@ async function vigiarPedidosNovos() {
     // Impressão — o processo principal é o dono; o renderer não imprime mais.
     if (autoPrint && cfg.printerName && deveImprimirCanal(canal, canais)) {
       try {
-        await autoPrintOrder(p, cfg.printerName, widthCols, vias, includeReadyQr)
+        // Falha de impressão já é avisada dentro de autoPrintOrder.
+        await autoPrintOrder(p, cfg.printerName, widthCols, vias, includeReadyQr, 'auto')
       } catch (err) {
         console.error('Falha ao imprimir pedido novo (vigia principal):', err)
       }
@@ -1065,7 +1439,7 @@ ipcMain.handle('scan-order-ready', async (_e, orderId: string, connectionId?: st
     : getConnections()
 
   if (conexoes.length === 0) {
-    return { ok: false, error: 'Configure a URL e o código da loja' }
+    return { ok: false, error: 'Ligue este computador a uma loja em Configurações' }
   }
 
   // Sem connectionId (pedido fora dos 100 cartões carregados), consulta todas
@@ -1117,7 +1491,7 @@ ipcMain.handle('criar-pedido-balcao', async (_e, pedido: unknown, connectionId?:
       { method: 'POST', body: JSON.stringify(pedido) },
       connectionId
     )
-    // Não espera o próximo ciclo do vigia (até 25s) — o atendente quer ver o
+    // Não espera o próximo ciclo do vigia (até 7 s) — o atendente quer ver o
     // pedido que acabou de fechar no Kanban na hora.
     void vigiarPedidosNovos()
     return { ok: true, orderId: data.orderId, totalCents: data.totalCents }
@@ -1431,7 +1805,7 @@ app.whenReady().then(() => {
     // telefone.
     { label: 'Abrir pasta de logs', click: () => { void shell.openPath(pastaDoLog()) } },
     { type: 'separator' },
-    { label: 'Sair', click: () => { isQuitting = true; app.quit() } },
+    { label: 'Sair do Cardapia', click: () => { isQuitting = true; app.quit() } },
   ]))
   tray.on('double-click', () => mainWindow?.show())
 

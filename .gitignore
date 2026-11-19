@@ -5,3 +5,6 @@ release/
 .env
 .env.local
 *.log
+
+# App Android (Capacitor)
+dist-android/

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { X, Send, Bot, User, Headset } from 'lucide-react'
 import type { WhatsappConversationDetail, WhatsappMessage } from '../electron-api'
+import { useConfirmar } from './Confirmar'
 
 interface Props {
   conversationId: string
@@ -11,6 +12,17 @@ interface Props {
 
 function formatTime(dateStr: string) {
   return new Date(dateStr).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+}
+
+function rotuloStatus(status: WhatsappConversationDetail['status'] | string): string {
+  switch (status) {
+    case 'awaiting_human': return 'Aguardando atendente'
+    case 'human_active': return 'Atendimento manual'
+    case 'bot_active': return 'Atendente automático respondendo'
+    case 'closed': return 'Conversa encerrada'
+    case 'muted_automated': return 'Mensagem automática, sem resposta'
+    default: return 'Situação desconhecida'
+  }
 }
 
 function bubbleStyle(role: WhatsappMessage['role']) {
@@ -36,14 +48,16 @@ export function WhatsappPanel({ conversationId, connectionId, onClose, onChanged
   const [resuming, setResuming] = useState(false)
   const [error, setError] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
+  const confirmar = useConfirmar()
 
   const load = async () => {
     try {
       const data = await window.api.getWhatsappMessages(conversationId, connectionId)
       setConversation(data.conversation)
       setMessages(data.messages ?? [])
+      setError('')
     } catch {
-      setError('Não foi possível carregar a conversa')
+      setError('Não deu para carregar a conversa · sem resposta do servidor')
     } finally {
       setLoading(false)
     }
@@ -68,25 +82,42 @@ export function WhatsappPanel({ conversationId, connectionId, onClose, onChanged
     if (!message || sending) return
     setSending(true)
     try {
-      await window.api.sendWhatsappReply(conversationId, message, connectionId)
+      const ok = await window.api.sendWhatsappReply(conversationId, message, connectionId)
+      if (ok === false) {
+        setError('Não deu para enviar a mensagem · o WhatsApp não confirmou o envio')
+        return
+      }
       setReply('')
+      setError('')
       onChanged()
       window.setTimeout(() => { void load() }, 1500)
     } catch {
-      setError('Não foi possível enviar a mensagem')
+      setError('Não deu para enviar a mensagem · sem resposta do servidor')
     } finally {
       setSending(false)
     }
   }
 
   async function resumeBot() {
+    const ok = await confirmar({
+      titulo: 'Devolver a conversa para o atendente automático?',
+      descricao: 'O atendente automático volta a responder este cliente.',
+      confirmarRotulo: 'Devolver conversa',
+      cancelarRotulo: 'Continuar atendendo',
+    })
+    if (!ok) return
     setResuming(true)
     try {
-      await window.api.resumeWhatsappBot(conversationId, connectionId)
+      const feito = await window.api.resumeWhatsappBot(conversationId, connectionId)
+      if (feito === false) {
+        setError('Não deu para devolver a conversa · o servidor não confirmou')
+        return
+      }
+      setError('')
       onChanged()
       void load()
     } catch {
-      setError('Não foi possível devolver a conversa pro bot')
+      setError('Não deu para devolver a conversa · sem resposta do servidor')
     } finally {
       setResuming(false)
     }
@@ -103,21 +134,21 @@ export function WhatsappPanel({ conversationId, connectionId, onClose, onChanged
             <p className="font-bold text-sm truncate text-[var(--text)]">{conversation?.phone ?? '...'}</p>
             {conversation && (
               <p className="text-[10px] text-[var(--text-muted)]">
-                {conversation.status === 'awaiting_human' ? 'Aguardando atendente' : conversation.status === 'human_active' ? 'Atendimento manual' : conversation.status}
+                {rotuloStatus(conversation.status)}
                 {conversation.handoff_reason ? ` — ${conversation.handoff_reason}` : ''}
               </p>
             )}
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-[var(--border-light)] text-[var(--text-muted)] flex-shrink-0" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          <button onClick={onClose} aria-label="Fechar conversa" className="p-2.5 rounded-lg hover:bg-[var(--border-light)] text-[var(--text-muted)] flex-shrink-0" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
             <X size={16} />
           </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
           {loading ? (
-            <p className="text-center py-8 text-xs text-[var(--text-xmuted)]">Carregando...</p>
+            <p className="text-center py-8 text-xs text-[var(--text-muted)]">Carregando a conversa…</p>
           ) : messages.length === 0 ? (
-            <p className="text-center py-8 text-xs text-[var(--text-xmuted)]">Nenhuma mensagem ainda</p>
+            <p className="text-center py-8 text-xs text-[var(--text-xmuted)]">Nenhuma mensagem nesta conversa ainda.</p>
           ) : (
             messages.filter((message) => message.role !== 'tool').map((message) => (
               <div key={message.id} className={`max-w-[85%] rounded-xl px-3 py-2 flex flex-col gap-0.5 ${bubbleStyle(message.role)}`}>
@@ -138,13 +169,15 @@ export function WhatsappPanel({ conversationId, connectionId, onClose, onChanged
               value={reply}
               onChange={(event) => setReply(event.target.value)}
               onKeyDown={(event) => { if (event.key === 'Enter') void sendReply() }}
-              placeholder="Responder pelo WhatsApp..."
+              placeholder="Responder pelo WhatsApp"
+              aria-label="Resposta ao cliente"
               className="flex-1 bg-[var(--card)] border border-[var(--border)] rounded-xl px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-xmuted)] focus:outline-none focus:border-[var(--primary)]"
             />
             <button
               onClick={sendReply}
               disabled={sending || !reply.trim()}
-              className="p-2.5 rounded-xl bg-[var(--primary)] text-[var(--primary-fg)] disabled:opacity-40"
+              aria-label="Enviar resposta"
+              className="p-3 rounded-xl bg-[var(--primary)] text-[var(--primary-fg)] disabled:opacity-40"
             >
               <Send size={15} />
             </button>
@@ -152,9 +185,10 @@ export function WhatsappPanel({ conversationId, connectionId, onClose, onChanged
           <button
             onClick={resumeBot}
             disabled={resuming}
-            className="w-full flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-xl border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] text-[var(--text-muted)] transition-colors disabled:opacity-40"
+            aria-label="Devolver para o atendente automático"
+            className="w-full flex items-center justify-center gap-1.5 text-sm min-h-11 px-3 py-2 rounded-xl border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] text-[var(--text-muted)] transition-colors disabled:opacity-40"
           >
-            <User size={12} /> Devolver para o bot
+            <User size={14} /> Devolver para o bot
           </button>
         </div>
       </div>

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Cardapia</string>
+    <string name="title_activity_main">Cardapia</string>
+    <string name="package_name">shop.cardapia.pedidos</string>
+    <string name="custom_url_scheme">shop.cardapia.pedidos</string>
+</resources>

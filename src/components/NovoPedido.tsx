@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Minus, Plus, Search, ShoppingCart, Trash2, X } from 'lucide-react'
 import {
   fmtMoney,
@@ -9,6 +9,48 @@ import {
   type CatalogoProduto,
 } from '../types'
 import type { PedidoBalcaoInput } from '../electron-api'
+import { useConfirmar } from './Confirmar'
+
+/** Linha do carrinho com observação própria (o tipo compartilhado ainda não tem `notes`). */
+type ItemCarrinho = CarrinhoItem & { notes?: string | null }
+
+interface Rascunho {
+  carrinho: ItemCarrinho[]
+  nome: string
+  telefone: string
+  fulfillmentType: 'pickup' | 'delivery'
+  cep: string
+  endereco: string
+  numero: string
+  complemento: string
+  paymentMethod: string
+  changeFor: string
+  notes: string
+}
+
+// Rascunho por loja: sair da aba desmonta este componente, e perder o carrinho
+// no meio de um pedido de balcão custa o pedido. sessionStorage some ao fechar o app.
+const chaveRascunho = (connectionId: string) => `cardapia.rascunho.balcao.${connectionId}`
+
+function lerRascunho(connectionId: string | undefined): Partial<Rascunho> {
+  if (!connectionId) return {}
+  try {
+    const bruto = window.sessionStorage.getItem(chaveRascunho(connectionId))
+    return bruto ? (JSON.parse(bruto) as Partial<Rascunho>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function gravarRascunho(connectionId: string | undefined, r: Rascunho | null) {
+  if (!connectionId) return
+  try {
+    if (r) window.sessionStorage.setItem(chaveRascunho(connectionId), JSON.stringify(r))
+    else window.sessionStorage.removeItem(chaveRascunho(connectionId))
+  } catch {
+    // armazenamento indisponível: o rascunho simplesmente não persiste
+  }
+}
 
 interface Props {
   stores: { id: string; storeName: string | null }[]
@@ -40,12 +82,13 @@ function EscolhaProdutoModal({
   onClose,
 }: {
   produto: CatalogoProduto
-  onAdicionar: (item: CarrinhoItem) => void
+  onAdicionar: (item: ItemCarrinho) => void
   onClose: () => void
 }) {
   const [variationId, setVariationId] = useState<string | null>(produto.variacoes[0]?.id ?? null)
   const [selecoes, setSelecoes] = useState<Record<string, string[]>>({})
   const [quantidade, setQuantidade] = useState(1)
+  const [observacao, setObservacao] = useState('')
 
   function alternarOpcao(groupId: string, optionId: string, max: number) {
     setSelecoes((prev) => {
@@ -80,6 +123,7 @@ function EscolhaProdutoModal({
       variationId,
       variationNome,
       quantity: quantidade,
+      notes: observacao.trim() || null,
       addonSelections,
       precoUnitarioEstimadoCents: precoEstimado(produto, variationId, addonSelections, []),
     })
@@ -93,7 +137,7 @@ function EscolhaProdutoModal({
       >
         <div className="flex items-start justify-between gap-2">
           <h3 className="font-semibold text-[var(--text)]">{produto.nome}</h3>
-          <button onClick={onClose} className="p-1 rounded-lg text-[var(--text-muted)] hover:bg-[var(--border-light)]">
+          <button onClick={onClose} aria-label="Fechar" className="p-2.5 rounded-lg text-[var(--text-muted)] hover:bg-[var(--border-light)]">
             <X size={16} />
           </button>
         </div>
@@ -138,19 +182,31 @@ function EscolhaProdutoModal({
           </div>
         ))}
 
+        <label className="block text-xs font-semibold text-[var(--text-muted)]">
+          Observação do item
+          <input
+            value={observacao}
+            onChange={(e) => setObservacao(e.target.value)}
+            placeholder="Ex.: sem cebola"
+            maxLength={140}
+            className="mt-1.5 w-full bg-[var(--card)] border border-[var(--border)] rounded-xl px-3 py-2 text-sm font-normal text-[var(--text)] placeholder:text-[var(--text-xmuted)] focus:outline-none focus:border-[var(--primary)]"
+          />
+        </label>
+
         <div className="flex items-center justify-between gap-3 pt-2 border-t border-[var(--border-light)]">
           <div className="flex items-center gap-3">
-            <button onClick={() => setQuantidade((q) => Math.max(1, q - 1))} className="w-8 h-8 flex items-center justify-center rounded-lg border border-[var(--border)] hover:bg-[var(--border-light)]">
+            <button onClick={() => setQuantidade((q) => Math.max(1, q - 1))} aria-label="Menos um" className="w-10 h-10 flex items-center justify-center rounded-lg border border-[var(--border)] hover:bg-[var(--border-light)]">
               <Minus size={14} />
             </button>
             <span className="w-6 text-center font-semibold">{quantidade}</span>
-            <button onClick={() => setQuantidade((q) => q + 1)} className="w-8 h-8 flex items-center justify-center rounded-lg border border-[var(--border)] hover:bg-[var(--border-light)]">
+            <button onClick={() => setQuantidade((q) => q + 1)} aria-label="Mais um" className="w-10 h-10 flex items-center justify-center rounded-lg border border-[var(--border)] hover:bg-[var(--border-light)]">
               <Plus size={14} />
             </button>
           </div>
           <button
             onClick={confirmar}
             disabled={gruposIncompletos.length > 0}
+            aria-label="Adicionar ao carrinho"
             className="bg-[var(--primary)] hover:bg-[var(--primary-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--primary-fg)] font-semibold rounded-xl px-5 py-2.5 text-sm transition-colors"
           >
             Adicionar
@@ -162,26 +218,30 @@ function EscolhaProdutoModal({
 }
 
 export function NovoPedido({ stores, onPedidoCriado }: Props) {
+  const confirmar = useConfirmar()
   const [connectionId, setConnectionId] = useState<string | undefined>(stores[0]?.id)
+  // Lido uma vez, na montagem, para a loja que abre selecionada.
+  const rascunhoInicial = useRef<Partial<Rascunho>>(lerRascunho(stores[0]?.id))
+  const envioEmCurso = useRef(false)
   const [categorias, setCategorias] = useState<CatalogoCategoria[]>([])
   const [carregando, setCarregando] = useState(true)
   const [erroCatalogo, setErroCatalogo] = useState('')
   const [busca, setBusca] = useState('')
   const [categoriaAtivaId, setCategoriaAtivaId] = useState<string | null>(null)
 
-  const [carrinho, setCarrinho] = useState<CarrinhoItem[]>([])
+  const [carrinho, setCarrinho] = useState<ItemCarrinho[]>(() => rascunhoInicial.current.carrinho ?? [])
   const [produtoEscolhendo, setProdutoEscolhendo] = useState<CatalogoProduto | null>(null)
 
-  const [nome, setNome] = useState('')
-  const [telefone, setTelefone] = useState('')
-  const [fulfillmentType, setFulfillmentType] = useState<'pickup' | 'delivery'>('pickup')
-  const [cep, setCep] = useState('')
-  const [endereco, setEndereco] = useState('')
-  const [numero, setNumero] = useState('')
-  const [complemento, setComplemento] = useState('')
-  const [paymentMethod, setPaymentMethod] = useState('cash')
-  const [changeFor, setChangeFor] = useState('')
-  const [notes, setNotes] = useState('')
+  const [nome, setNome] = useState(() => rascunhoInicial.current.nome ?? '')
+  const [telefone, setTelefone] = useState(() => rascunhoInicial.current.telefone ?? '')
+  const [fulfillmentType, setFulfillmentType] = useState<'pickup' | 'delivery'>(() => rascunhoInicial.current.fulfillmentType ?? 'pickup')
+  const [cep, setCep] = useState(() => rascunhoInicial.current.cep ?? '')
+  const [endereco, setEndereco] = useState(() => rascunhoInicial.current.endereco ?? '')
+  const [numero, setNumero] = useState(() => rascunhoInicial.current.numero ?? '')
+  const [complemento, setComplemento] = useState(() => rascunhoInicial.current.complemento ?? '')
+  const [paymentMethod, setPaymentMethod] = useState(() => rascunhoInicial.current.paymentMethod ?? 'cash')
+  const [changeFor, setChangeFor] = useState(() => rascunhoInicial.current.changeFor ?? '')
+  const [notes, setNotes] = useState(() => rascunhoInicial.current.notes ?? '')
   const [enviando, setEnviando] = useState(false)
   const [erroEnvio, setErroEnvio] = useState('')
 
@@ -191,6 +251,33 @@ export function NovoPedido({ stores, onPedidoCriado }: Props) {
       setConnectionId(stores[0].id)
     }
   }, [stores, connectionId])
+
+  // Guarda o rascunho a cada mudança; vazio, apaga a chave.
+  useEffect(() => {
+    const vazio = carrinho.length === 0 && !nome && !telefone && !cep && !endereco && !numero
+      && !complemento && !changeFor && !notes
+    gravarRascunho(connectionId, vazio ? null : {
+      carrinho, nome, telefone, fulfillmentType, cep, endereco, numero, complemento, paymentMethod, changeFor, notes,
+    })
+  }, [connectionId, carrinho, nome, telefone, fulfillmentType, cep, endereco, numero, complemento, paymentMethod, changeFor, notes])
+
+  async function trocarLoja(novaId: string) {
+    if (novaId === connectionId) return
+    if (carrinho.length > 0) {
+      const ok = await confirmar({
+        titulo: 'Trocar de loja e esvaziar o carrinho?',
+        descricao: 'Os itens do carrinho são do cardápio da loja atual e não valem na outra.',
+        confirmarRotulo: 'Trocar e esvaziar',
+        cancelarRotulo: 'Manter loja',
+        perigo: true,
+      })
+      if (!ok) return
+      setCarrinho([])
+      gravarRascunho(connectionId, null)
+    }
+    setConnectionId(novaId)
+    setCategoriaAtivaId(null)
+  }
 
   useEffect(() => {
     let ativo = true
@@ -223,12 +310,13 @@ export function NovoPedido({ stores, onPedidoCriado }: Props) {
 
   function adicionarSimples(produto: CatalogoProduto) {
     setCarrinho((prev) => {
-      const existente = prev.find((i) => i.productId === produto.id && i.variationId === null && i.addonSelections.length === 0)
+      const existente = prev.find((i) => i.productId === produto.id && i.variationId === null && i.addonSelections.length === 0 && !i.notes)
       if (existente) {
         return prev.map((i) => i.chave === existente.chave ? { ...i, quantity: i.quantity + 1 } : i)
       }
       return [...prev, {
         chave: novaChave(),
+        notes: null,
         productId: produto.id,
         productNome: produto.nome,
         variationId: null,
@@ -254,6 +342,10 @@ export function NovoPedido({ stores, onPedidoCriado }: Props) {
       .filter((i) => i.quantity > 0))
   }
 
+  function alterarObservacao(chave: string, texto: string) {
+    setCarrinho((prev) => prev.map((i) => i.chave === chave ? { ...i, notes: texto } : i))
+  }
+
   const subtotalCents = carrinho.reduce((soma, item) => soma + item.precoUnitarioEstimadoCents * item.quantity, 0)
 
   function limparFormulario() {
@@ -268,17 +360,26 @@ export function NovoPedido({ stores, onPedidoCriado }: Props) {
     setPaymentMethod('cash')
     setChangeFor('')
     setNotes('')
+    gravarRascunho(connectionId, null)
   }
 
   async function fecharPedido() {
+    if (envioEmCurso.current) return
     setErroEnvio('')
-    if (carrinho.length === 0) { setErroEnvio('Adicione ao menos um item ao carrinho'); return }
-    if (nome.trim().length < 2) { setErroEnvio('Informe o nome do cliente'); return }
+    if (carrinho.length === 0) { setErroEnvio('Não deu para fechar o pedido · o carrinho está vazio'); return }
+    if (nome.trim().length < 2) { setErroEnvio('Não deu para fechar o pedido · falta o nome do cliente'); return }
     const telefoneDigitos = telefone.replace(/\D/g, '')
-    if (telefoneDigitos.length < 10) { setErroEnvio('Informe um telefone válido, com DDD'); return }
+    if (telefoneDigitos.length < 10) { setErroEnvio('Não deu para fechar o pedido · o telefone precisa do DDD'); return }
     if (fulfillmentType === 'delivery') {
-      if (cep.replace(/\D/g, '').length !== 8) { setErroEnvio('Informe um CEP válido'); return }
-      if (endereco.trim().length < 2 || numero.trim().length < 1) { setErroEnvio('Informe o endereço completo'); return }
+      if (cep.replace(/\D/g, '').length !== 8) { setErroEnvio('Não deu para fechar o pedido · o CEP precisa de 8 números'); return }
+      if (endereco.trim().length < 2 || numero.trim().length < 1) { setErroEnvio('Não deu para fechar o pedido · falta o endereço ou o número'); return }
+    }
+    const trocoCents = paymentMethod === 'cash' && changeFor.trim()
+      ? Math.round(Number(changeFor.replace(',', '.')) * 100)
+      : null
+    if (trocoCents != null && (!Number.isFinite(trocoCents) || trocoCents <= 0)) {
+      setErroEnvio('Não deu para fechar o pedido · o valor do troco não é um número')
+      return
     }
 
     const metodo = PAYMENT_METHODS_BALCAO.find((m) => m.value === paymentMethod)
@@ -287,7 +388,7 @@ export function NovoPedido({ stores, onPedidoCriado }: Props) {
         productId: item.productId,
         variationId: item.variationId,
         quantity: item.quantity,
-        notes: null,
+        notes: item.notes?.trim() || null,
         addonSelections: item.addonSelections.map((a) => ({ groupId: a.groupId, optionIds: a.optionIds })),
       })),
       customerName: nome.trim(),
@@ -299,19 +400,21 @@ export function NovoPedido({ stores, onPedidoCriado }: Props) {
       addressComplement: fulfillmentType === 'delivery' ? (complemento.trim() || null) : null,
       paymentMethod,
       cardOnDelivery: metodo?.cardOnDelivery === true,
-      changeForCents: paymentMethod === 'cash' && changeFor.trim()
-        ? Math.round(Number(changeFor.replace(',', '.')) * 100)
-        : null,
+      changeForCents: trocoCents,
       notes: notes.trim() || null,
     }
 
+    envioEmCurso.current = true
     setEnviando(true)
     try {
       const res = await window.api.criarPedidoBalcao(payload, connectionId)
       if (!res.ok) { setErroEnvio(res.error); return }
       onPedidoCriado({ orderId: res.orderId, totalCents: res.totalCents })
       limparFormulario()
+    } catch {
+      setErroEnvio('Não deu para fechar o pedido · sem resposta do servidor. Confira a fila antes de tentar de novo.')
     } finally {
+      envioEmCurso.current = false
       setEnviando(false)
     }
   }
@@ -324,7 +427,8 @@ export function NovoPedido({ stores, onPedidoCriado }: Props) {
           {stores.length > 1 && (
             <select
               value={connectionId}
-              onChange={(e) => setConnectionId(e.target.value)}
+              onChange={(e) => void trocarLoja(e.target.value)}
+              aria-label="Loja do pedido"
               className="w-full bg-[var(--card)] border border-[var(--border)] rounded-xl px-3 py-2 text-sm text-[var(--text)] focus:outline-none focus:border-[var(--primary)]"
             >
               {stores.map((s) => (
@@ -338,6 +442,7 @@ export function NovoPedido({ stores, onPedidoCriado }: Props) {
               value={busca}
               onChange={(e) => setBusca(e.target.value)}
               placeholder="Buscar produto"
+              aria-label="Buscar produto"
               className="w-full bg-[var(--card)] border border-[var(--border)] rounded-xl pl-9 pr-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-xmuted)] focus:outline-none focus:border-[var(--primary)]"
             />
           </div>
@@ -360,11 +465,11 @@ export function NovoPedido({ stores, onPedidoCriado }: Props) {
 
         <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
           {carregando ? (
-            <p className="text-center py-8 text-[var(--text-muted)] flex items-center justify-center gap-2 text-sm"><Loader2 size={14} className="animate-spin" /> Carregando cardápio...</p>
+            <p className="text-center py-8 text-[var(--text-muted)] flex items-center justify-center gap-2 text-sm"><Loader2 size={14} className="animate-spin" /> Carregando o cardápio…</p>
           ) : erroCatalogo ? (
             <p className="text-center py-8 text-[var(--danger)] text-sm">{erroCatalogo}</p>
           ) : produtosExibidos.length === 0 ? (
-            <p className="text-center py-8 text-[var(--text-xmuted)] text-sm">Nenhum produto encontrado</p>
+            <p className="text-center py-8 text-[var(--text-xmuted)] text-sm">Nenhum produto com esse nome.</p>
           ) : (
             produtosExibidos.map((p) => (
               <button
@@ -389,7 +494,7 @@ export function NovoPedido({ stores, onPedidoCriado }: Props) {
             <ShoppingCart size={13} /> Carrinho
           </h3>
           {carrinho.length === 0 ? (
-            <p className="text-xs text-[var(--text-xmuted)] py-4 text-center">Nenhum item ainda</p>
+            <p className="text-xs text-[var(--text-xmuted)] py-4 text-center">Toque num produto para adicionar ao pedido.</p>
           ) : (
             carrinho.map((item) => (
               <div key={item.chave} className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3 space-y-1.5">
@@ -400,17 +505,25 @@ export function NovoPedido({ stores, onPedidoCriado }: Props) {
                       <p className="text-[11px] text-[var(--text-muted)] truncate">{item.addonSelections.flatMap((a) => a.opcoesNomes).join(', ')}</p>
                     )}
                   </div>
-                  <button onClick={() => alterarQuantidade(item.chave, -item.quantity)} className="p-1 rounded-lg text-[var(--text-xmuted)] hover:bg-red-500/10 hover:text-[var(--danger)] flex-shrink-0">
+                  <button onClick={() => alterarQuantidade(item.chave, -item.quantity)} aria-label={`Remover ${item.productNome}`} className="p-2.5 rounded-lg text-[var(--text-xmuted)] hover:bg-red-500/10 hover:text-[var(--danger)] flex-shrink-0">
                     <Trash2 size={13} />
                   </button>
                 </div>
+                <input
+                  value={item.notes ?? ''}
+                  onChange={(e) => alterarObservacao(item.chave, e.target.value)}
+                  placeholder="Observação do item (ex.: sem cebola)"
+                  aria-label={`Observação de ${item.productNome}`}
+                  maxLength={140}
+                  className="w-full bg-[var(--card)] border border-[var(--border)] rounded-lg px-2.5 py-1.5 text-xs placeholder:text-[var(--text-xmuted)] focus:outline-none focus:border-[var(--primary)]"
+                />
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <button onClick={() => alterarQuantidade(item.chave, -1)} className="w-6 h-6 flex items-center justify-center rounded-md border border-[var(--border)] hover:bg-[var(--border-light)]">
+                    <button onClick={() => alterarQuantidade(item.chave, -1)} aria-label="Menos um" className="w-9 h-9 flex items-center justify-center rounded-md border border-[var(--border)] hover:bg-[var(--border-light)]">
                       <Minus size={11} />
                     </button>
                     <span className="w-5 text-center text-sm font-semibold">{item.quantity}</span>
-                    <button onClick={() => alterarQuantidade(item.chave, 1)} className="w-6 h-6 flex items-center justify-center rounded-md border border-[var(--border)] hover:bg-[var(--border-light)]">
+                    <button onClick={() => alterarQuantidade(item.chave, 1)} aria-label="Mais um" className="w-9 h-9 flex items-center justify-center rounded-md border border-[var(--border)] hover:bg-[var(--border-light)]">
                       <Plus size={11} />
                     </button>
                   </div>
@@ -422,7 +535,7 @@ export function NovoPedido({ stores, onPedidoCriado }: Props) {
 
           {carrinho.length > 0 && (
             <div className="flex items-center justify-between pt-2 border-t border-[var(--border-light)] text-sm font-bold text-[var(--text)]">
-              <span>Subtotal estimado</span>
+              <span>{fulfillmentType === 'delivery' ? 'Subtotal, sem a taxa de entrega' : 'Subtotal estimado'}</span>
               <span>{fmtMoney(subtotalCents)}</span>
             </div>
           )}
@@ -434,8 +547,8 @@ export function NovoPedido({ stores, onPedidoCriado }: Props) {
               className="w-full bg-[var(--card)] border border-[var(--border)] rounded-xl px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-xmuted)] focus:outline-none focus:border-[var(--primary)]" />
 
             <div className="flex gap-1.5">
-              <button onClick={() => setFulfillmentType('pickup')} className={`flex-1 py-2 rounded-lg text-xs font-semibold ${fulfillmentType === 'pickup' ? 'bg-[var(--primary)] text-[var(--primary-fg)]' : 'bg-[var(--surface)] border border-[var(--border)] text-[var(--text-muted)]'}`}>Retirada</button>
-              <button onClick={() => setFulfillmentType('delivery')} className={`flex-1 py-2 rounded-lg text-xs font-semibold ${fulfillmentType === 'delivery' ? 'bg-[var(--primary)] text-[var(--primary-fg)]' : 'bg-[var(--surface)] border border-[var(--border)] text-[var(--text-muted)]'}`}>Entrega</button>
+              <button onClick={() => setFulfillmentType('pickup')} aria-pressed={fulfillmentType === 'pickup'} className={`flex-1 min-h-11 py-2 rounded-lg text-xs font-semibold ${fulfillmentType === 'pickup' ? 'bg-[var(--primary)] text-[var(--primary-fg)]' : 'bg-[var(--surface)] border border-[var(--border)] text-[var(--text-muted)]'}`}>Retirada</button>
+              <button onClick={() => setFulfillmentType('delivery')} aria-pressed={fulfillmentType === 'delivery'} className={`flex-1 min-h-11 py-2 rounded-lg text-xs font-semibold ${fulfillmentType === 'delivery' ? 'bg-[var(--primary)] text-[var(--primary-fg)]' : 'bg-[var(--surface)] border border-[var(--border)] text-[var(--text-muted)]'}`}>Entrega</button>
             </div>
 
             {fulfillmentType === 'delivery' && (
@@ -465,9 +578,10 @@ export function NovoPedido({ stores, onPedidoCriado }: Props) {
           <button
             onClick={() => void fecharPedido()}
             disabled={enviando || carrinho.length === 0}
+            aria-label="Fechar pedido"
             className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm transition-colors bg-[var(--primary)] hover:bg-[var(--primary-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--primary-fg)]"
           >
-            {enviando ? <><Loader2 size={15} className="animate-spin" /> Enviando...</> : `Fechar pedido — ${fmtMoney(subtotalCents)}`}
+            {enviando ? <><Loader2 size={15} className="animate-spin" /> Enviando o pedido…</> : fulfillmentType === 'delivery' ? `Fechar pedido — ${fmtMoney(subtotalCents)}, sem a taxa de entrega` : `Fechar pedido — ${fmtMoney(subtotalCents)}`}
           </button>
         </div>
       </div>

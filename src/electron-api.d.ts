@@ -187,13 +187,31 @@ export interface WhatsappMessagesResponse {
   messages: WhatsappMessage[]
 }
 
+/** Estado da conexão de uma loja com o servidor (visto pelo vigia do processo principal). */
+export type EstadoConexao = 'ok' | 'sem_rede' | 'nao_autorizado' | 'erro_servidor'
+
+export type SaudeApp = {
+  conexoes: { connectionId: string; label: string; estado: EstadoConexao; ultimoSucessoEm: number | null }[]
+  /** relógio do servidor menos o deste aparelho, em ms (pelo header Date das respostas); 0 se desconhecido */
+  diferencaRelogioMs: number
+  /** impressão automática ligada sem impressora escolhida */
+  autoPrintSemImpressora: boolean
+}
+
+export type FalhaImpressao = { orderId: string; rotulo: string; motivo: string; viasQueFaltaram: number }
+
+/** Retorno de `printOrder`: `ok: false` com `error` quando nada saiu. */
+export type ResultadoImpressao = { ok: true } | { ok: false; error: string }
+
 declare global {
   interface Window {
     api: {
+      /** Só o app Android preenche. Ausente = desktop (o preload do Electron não expõe). */
+      plataforma?: 'android'
       getConfig: () => Promise<DesktopConfig>
       saveConfig: (config: DesktopConfigInput) => Promise<boolean>
       getPrinters: () => Promise<PrinterInfo[]>
-      printOrder: (order: Order, includeReadyQr?: boolean) => Promise<'ok' | 'no-printer' | 'error'>
+      printOrder: (order: Order, includeReadyQr?: boolean) => Promise<ResultadoImpressao>
       fetchOrders: () => Promise<Order[]>
       /** offsetsPorConexao: quantas linhas DE CADA loja já apareceram — não um offset só compartilhado (ver fetch-order-history em main.ts). */
       fetchOrderHistory: (opts: { limit: number; offsetsPorConexao?: Record<string, number>; status?: OrderStatus | '' }) => Promise<{ orders: Order[]; hasMore: boolean }>
@@ -217,6 +235,10 @@ declare global {
       getIfoodDisputes: () => Promise<{ disputas: IfoodDispute[] }>
       respondIfoodDispute: (disputeId: string, resposta: 'accept' | 'reject', motivo: string | null, connectionId?: string) => Promise<{ ok: boolean; error?: string }>
       onPrintError: (callback: (error: string) => void) => () => void
+      /** Saúde do app (conexões, relógio, impressora). Emitido a cada ciclo do vigia e uma vez ao assinar. Pode faltar em build antigo: use `?.`. */
+      onSaude?: (callback: (saude: SaudeApp) => void) => () => void
+      /** Toda comanda que não saiu, automática ou manual. Pode faltar em build antigo: use `?.`. */
+      onFalhaImpressao?: (callback: (falha: FalhaImpressao) => void) => () => void
       onNewOrder: (callback: (info: { id: string; label: string; canal: string; customerName: string; isPickup: boolean }) => void) => () => void
       /** Lista completa e pronta de pedidos, empurrada pelo processo principal — não é mais o renderer quem busca. */
       onOrdersUpdated: (callback: (orders: Order[]) => void) => () => void

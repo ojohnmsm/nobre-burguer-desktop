@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { History, LayoutGrid, Maximize2, MessageCircle, Minimize2, Minus, Plus, Power, Printer, RefreshCw, Settings as SettingsIcon, WifiOff, X } from 'lucide-react'
+import { BellOff, History, LayoutGrid, Maximize2, MessageCircle, Minimize2, Minus, Plus, Power, Printer, RefreshCw, Settings as SettingsIcon, WifiOff, X } from 'lucide-react'
 import { OrderCard } from './components/OrderCard'
 import { NovoPedido } from './components/NovoPedido'
 import { Settings } from './components/Settings'
@@ -8,13 +8,15 @@ import { CancelIfoodDialog } from './components/CancelIfoodDialog'
 import { StorePausePanel } from './components/StorePausePanel'
 import { DisputasPanel } from './components/DisputasPanel'
 import { CapivaraMark } from './components/CapivaraMark'
+import { FaixaAlertas } from './components/FaixaAlertas'
+import { ConfirmarProvider, useConfirmar } from './components/Confirmar'
 import { ehMarketplace, fmtMoney, KANBAN_COLUMNS, STATUS_LABELS, type Order, type OrderStatus } from './types'
 import { rankStatus } from './orderFlow'
 import { useBarcodeScanner } from './useBarcodeScanner'
 import { orderLabel } from './orderLabel'
-import { compararFilaCozinha } from './orderTiming'
-import type { ScanReadyResult, WhatsappConnectionState, WhatsappStatusConversation } from './electron-api'
-import { loadNotificationSounds, playDriverArrivedAlert, playMessageAlert, playOrderAlert } from './notification-sound'
+import { agoraServidor, compararFilaCozinha, definirDiferencaRelogio } from './orderTiming'
+import type { FalhaImpressao, ResultadoImpressao, SaudeApp, ScanReadyResult, WhatsappConnectionState, WhatsappStatusConversation } from './electron-api'
+import { getEstadoAudio, loadNotificationSounds, onEstadoAudio, playDriverArrivedAlert, playMessageAlert, playOrderAlert, silenciadoAteMs, silenciarAlertas, tentarLiberarAudio } from './notification-sound'
 
 type Tab = 'kanban' | 'novo-pedido' | 'historico' | 'whatsapp' | 'settings'
 const ALL_STATUSES: OrderStatus[] = [
@@ -28,26 +30,100 @@ function isOperationalOrder(order: Order): boolean {
   return order.status !== 'awaiting_payment'
 }
 
+// O estado cru da Evolution ("close", "connecting") não diz o que fazer.
+function traduzirEstadoWhatsapp(estado: string): string {
+  if (estado === 'close') return 'reconecte pelo painel'
+  if (estado === 'connecting') return 'reconectando'
+  return estado
+}
+
 // Com uma loja só, `storeLabel` vem vazio (ver get-whatsapp-status em
-// main.ts) e isto mostra só o estado, igual ao texto de antes de existir
-// mais de uma conexão. Com mais de uma, nomeia qual está desconectada.
+// main.ts) e isto mostra só o estado. Com mais de uma, nomeia qual está
+// desconectada.
 function rotuloLojasDesconectadas(desconectadas: WhatsappConnectionState[]): string {
   if (desconectadas.length === 0) return ''
-  const partes = desconectadas.map(cs => cs.storeLabel ? `${cs.storeLabel}: ${cs.state}` : cs.state)
-  return ` (${partes.join(', ')})`
+  const partes = desconectadas.map(cs => cs.storeLabel
+    ? `${cs.storeLabel}: ${traduzirEstadoWhatsapp(cs.state)}`
+    : traduzirEstadoWhatsapp(cs.state))
+  return ` · ${partes.join(', ')}`
+}
+
+// "o iFood", "o 99Food" — a mensagem tem que dizer quem não respondeu.
+function nomeMarketplace(channel: string | null | undefined): string {
+  return channel === '99food' ? '99Food' : channel === 'ifood' ? 'iFood' : 'marketplace'
+}
+
+function impressaoOk(resultado: ResultadoImpressao): boolean {
+  return resultado.ok === true
+}
+
+function erroImpressao(resultado: ResultadoImpressao): string {
+  return resultado.ok === false ? resultado.error : 'a impressora não respondeu'
+}
+
+type TipoAviso = 'info' | 'erro'
+interface Aviso { id: number; texto: string; tipo: TipoAviso }
+const DURACAO_AVISO_MS: Record<TipoAviso, number> = { info: 6000, erro: 12000 }
+const REPETIR_ALERTA_PEDIDO_MS = 45_000
+const BUCKET_MS = 15000
+
+function formatarContagem(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000))
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+}
+
+type BotaoNavProps = {
+  ativo: boolean
+  rotulo: string
+  onClick: () => void
+  children: React.ReactNode
+}
+
+function BotaoNav({ ativo, rotulo, onClick, children }: BotaoNavProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={rotulo}
+      aria-label={rotulo}
+      aria-current={ativo ? 'page' : undefined}
+      className={`relative flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-semibold transition-colors ${ativo ? 'text-[var(--primary)] bg-[var(--primary-tint)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--border-light)]'}`}
+    >
+      {children}
+      <span>{rotulo}</span>
+    </button>
+  )
 }
 
 export default function App() {
+  return (
+    <ConfirmarProvider>
+      <AppInterno />
+    </ConfirmarProvider>
+  )
+}
+
+function AppInterno() {
+  const confirmar = useConfirmar()
   const [tab, setTab] = useState<Tab>('kanban')
   const [stores, setStores] = useState<{ id: string; storeName: string | null; online: boolean; ifoodConectado: boolean; ifoodPollingParadoSegundos: number | null }[]>([])
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [autoPrint, setAutoPrint] = useState(true)
   const [scannerReady, setScannerReady] = useState(false)
-  const [notifications, setNotifications] = useState<string[]>([])
+  const [avisos, setAvisos] = useState<Aviso[]>([])
+  const [saude, setSaude] = useState<SaudeApp | null>(null)
+  const [falhasImpressao, setFalhasImpressao] = useState<FalhaImpressao[]>([])
+  const [enviandoIds, setEnviandoIds] = useState<Set<string>>(new Set())
+  const enviandoRef = useRef<Set<string>>(new Set())
+  // Pedidos de balcão lançados NESTE aparelho: já foram vistos por quem os digitou.
+  const proprioIdsRef = useRef<Set<string>>(new Set())
+  const [, forcarRenderAudio] = useState(0)
   const [configured, setConfigured] = useState(false)
 
-  const notificationTimerRef = useRef<number | null>(null)
+  const avisoSeqRef = useRef(0)
+  const avisoTimersRef = useRef<Set<number>>(new Set())
+  const tabAnteriorRef = useRef<Tab>('kanban')
   const hasLoadedOrdersRef = useRef(false)
   const driverStageRef = useRef<Map<string, string>>(new Map())
   // Pedido do iFood: o card anda NA HORA ao clicar; este mapa segura a posição
@@ -69,7 +145,14 @@ export default function App() {
 
   // "Agora" para os cartões, em blocos de 15s — ver o comentário na prop
   // `agoraBucket` de OrderCard sobre por que não é só `Date.now()` no render.
-  const [agoraBucket, setAgoraBucket] = useState(() => Math.floor(Date.now() / 15000))
+  const [agoraBucket, setAgoraBucket] = useState(() => Math.floor(agoraServidor() / BUCKET_MS))
+
+  // Temporizador próprio: sem ele o "atrasado X min" congelava quando a rede
+  // caía, porque o bucket só avançava ao chegar uma lista nova.
+  useEffect(() => {
+    const id = window.setInterval(() => setAgoraBucket(Math.floor(agoraServidor() / BUCKET_MS)), BUCKET_MS)
+    return () => window.clearInterval(id)
+  }, [])
 
   // ── Pedidos novos não vistos (abrir o card reconhece) ──────────────────────
   // O "visto" é persistido no banco (orders.acknowledged_at) via API em vez
@@ -77,12 +160,12 @@ export default function App() {
   // dispositivos (esse app rodando em vários PCs + o admin web) e sobrevive
   // a reload/restart, já que a fonte de verdade não é mais o estado de uma
   // instância específica.
-  const unacknowledgedOrders = orders.filter(order =>
-    isOperationalOrder(order)
-      && !order.acknowledged_at
-      && order.status !== 'delivered'
-      && order.status !== 'cancelled'
+  // "Pendente" é o pedido que ainda espera o botão "Confirmar pedido". Um só
+  // nome para a faixa, o chip do card e o botão.
+  const pendentes = orders.filter(order =>
+    isOperationalOrder(order) && (order.status === 'pending' || order.status === 'paid')
   )
+  const pendentesNaoVistos = pendentes.filter(order => !order.acknowledged_at)
 
   const ackOrder = useCallback((orderId: string) => {
     // Lido ANTES do setOrders, igual o closure de `orders` fazia antes — o
@@ -97,10 +180,16 @@ export default function App() {
     void window.api.acknowledgeOrder(orderId, connectionId)
   }, [])
 
-  const addNotification = useCallback((message: string) => {
-    setNotifications(previous => [message, ...previous].slice(0, 5))
-    if (notificationTimerRef.current) window.clearTimeout(notificationTimerRef.current)
-    notificationTimerRef.current = window.setTimeout(() => setNotifications([]), 6000)
+  // Aviso com tipo: erro fica mais tempo e não é atropelado por um informativo
+  // (cada um tem o próprio prazo, empilhados).
+  const notify = useCallback((mensagem: string, tipo: TipoAviso = 'info') => {
+    const id = ++avisoSeqRef.current
+    setAvisos(previous => [{ id, texto: mensagem, tipo }, ...previous].slice(0, 5))
+    const timer = window.setTimeout(() => {
+      avisoTimersRef.current.delete(timer)
+      setAvisos(previous => previous.filter(a => a.id !== id))
+    }, DURACAO_AVISO_MS[tipo])
+    avisoTimersRef.current.add(timer)
   }, [])
 
   // Aplica uma lista fresca de pedidos ao estado — merge otimista, som de
@@ -118,7 +207,7 @@ export default function App() {
     for (const idOpt of [...optimisticRef.current.keys()]) {
       if (!idsAtuais.has(idOpt)) optimisticRef.current.delete(idOpt)
     }
-    const marketplaceSemConfirmacao: string[] = []
+    const marketplaceSemConfirmacao: Order[] = []
     const comOtimista = operationalOrders.map(order => {
       const opt = optimisticRef.current.get(order.id)
       if (!opt) return order
@@ -128,7 +217,7 @@ export default function App() {
       }
       if (agoraMerge - opt.ts > 90_000) {
         optimisticRef.current.delete(order.id)
-        marketplaceSemConfirmacao.push(orderLabel(order))
+        marketplaceSemConfirmacao.push(order)
         return order
       }
       return { ...order, status: opt.status }
@@ -150,11 +239,19 @@ export default function App() {
 
     ordersRef.current = estabilizados
     setOrders(estabilizados)
-    setAgoraBucket(Math.floor(agoraMerge / 15000))
+    setAgoraBucket(Math.floor(agoraServidor() / BUCKET_MS))
     hasLoadedOrdersRef.current = true
 
-    if (marketplaceSemConfirmacao.length > 0) {
-      addNotification(`O marketplace não confirmou o pedido #${marketplaceSemConfirmacao.join(', #')}; ele voltou ao estado anterior`)
+    for (const recusado of marketplaceSemConfirmacao) {
+      notify(`O ${nomeMarketplace(recusado.channel)} não confirmou o pedido #${orderLabel(recusado)} · ele voltou para a etapa anterior`, 'erro')
+    }
+
+    // Pedido de balcão lançado neste aparelho: quem digitou já o viu, então não
+    // fica "pendente não visto" tocando de novo.
+    for (const order of estabilizados) {
+      if (proprioIdsRef.current.has(order.id) && !order.acknowledged_at) {
+        queueMicrotask(() => ackOrder(order.id))
+      }
     }
 
     // Pedido NOVO (alerta sonoro + toast + impressão) é responsabilidade do
@@ -177,9 +274,9 @@ export default function App() {
     driverStageRef.current = novoStages
     if (entregadorChegou) {
       playDriverArrivedAlert()
-      addNotification('🛵 Entregador do iFood chegou na loja')
+      notify('Entregador do iFood chegou na loja')
     }
-  }, [addNotification])
+  }, [notify, ackOrder])
 
   const loadOrders = useCallback(async () => {
     if (!hasLoadedOrdersRef.current) setLoading(true)
@@ -189,11 +286,11 @@ export default function App() {
       aplicarPedidosRecebidos(data)
     } catch {
       if (!hasLoadedOrdersRef.current) { ordersRef.current = []; setOrders([]) }
-      addNotification('Não foi possível atualizar os pedidos')
+      notify('Não deu para atualizar os pedidos · confira a conexão com o servidor', 'erro')
     } finally {
       setLoading(false)
     }
-  }, [addNotification, aplicarPedidosRecebidos])
+  }, [notify, aplicarPedidosRecebidos])
 
   const readConfig = useCallback(async () => {
     const config = await window.api.getConfig()
@@ -223,20 +320,27 @@ export default function App() {
       if (active && !ready) setLoading(false)
     })
 
-    const unsubscribeError = window.api.onPrintError(error => addNotification(`Erro de impressão: ${error}`))
+    // A faixa de "comanda que não saiu" (onFalhaImpressao) já cobre o erro de
+    // impressão, e fica na tela; o aviso em pílula só vale em build sem ela.
+    const unsubscribeError = window.api.onFalhaImpressao
+      ? () => {}
+      : window.api.onPrintError(error => notify(`A comanda não saiu · ${error}`, 'erro'))
 
     // Pedido novo detectado pelo PROCESSO PRINCIPAL — que roda mesmo com a
     // janela minimizada / na bandeja, quando os timers do renderer congelam.
     // Ele já imprimiu a comanda e disparou a notificação nativa do SO; aqui
     // só complementamos com o som configurável e o aviso dentro do app.
     const unsubscribeNovoPedido = window.api.onNewOrder(info => {
+      // Pedido que esta própria tela acabou de lançar no balcão: sem alerta
+      // nem aviso por cima do total que a pessoa está olhando.
+      if (proprioIdsRef.current.has(info.id)) return
       playOrderAlert()
-      const origem = info.canal === 'ifood' ? 'iFood — '
-        : info.canal === '99food' ? '99Food — '
-        : info.canal === 'whatsapp' ? 'WhatsApp — '
+      const origem = info.canal === 'ifood' ? 'iFood · '
+        : info.canal === '99food' ? '99Food · '
+        : info.canal === 'whatsapp' ? 'WhatsApp · '
         : ''
-      const retirada = info.isPickup ? 'RETIRADA — ' : ''
-      addNotification(`🔔 ${retirada}${origem}Novo pedido #${info.label} — ${info.customerName}`)
+      const retirada = info.isPickup ? 'Retirada · ' : ''
+      notify(`${retirada}${origem}Novo pedido #${info.label} · ${info.customerName}`)
       // Sem fetch aqui: o processo principal já manda 'pedidos-atualizados'
       // com a lista fresca ANTES deste evento, no mesmo ciclo (ver
       // vigiarPedidosNovos em main.ts) — buscar de novo seria a mesma
@@ -247,9 +351,54 @@ export default function App() {
       active = false
       unsubscribeError()
       unsubscribeNovoPedido()
-      if (notificationTimerRef.current) window.clearTimeout(notificationTimerRef.current)
     }
-  }, [addNotification, loadOrders, readConfig])
+  }, [notify, loadOrders, readConfig])
+
+  useEffect(() => {
+    const timers = avisoTimersRef.current
+    return () => { timers.forEach(t => window.clearTimeout(t)); timers.clear() }
+  }, [])
+
+  // Saúde do app (conexões, relógio, impressora), empurrada pelo vigia do
+  // processo principal. Defensivo: um build sem `onSaude` só fica sem as faixas.
+  useEffect(() => {
+    const cancelar = window.api.onSaude?.(estado => {
+      definirDiferencaRelogio(estado.diferencaRelogioMs)
+      setAgoraBucket(Math.floor(agoraServidor() / BUCKET_MS))
+      setSaude(estado)
+    })
+    return () => { cancelar?.() }
+  }, [])
+
+  // Comanda que não saiu: uma linha por pedido, até resolver ou dispensar.
+  useEffect(() => {
+    const cancelar = window.api.onFalhaImpressao?.(falha => {
+      setFalhasImpressao(previous => [falha, ...previous.filter(f => f.orderId !== falha.orderId)])
+    })
+    return () => { cancelar?.() }
+  }, [])
+
+  // Estado do áudio e silêncio: re-renderiza quando muda e, enquanto mudo,
+  // a cada segundo para a contagem andar.
+  useEffect(() => onEstadoAudio(() => forcarRenderAudio(n => n + 1)), [])
+  const silenciadoAte = silenciadoAteMs()
+  useEffect(() => {
+    if (!silenciadoAte) return
+    const id = window.setInterval(() => {
+      forcarRenderAudio(n => n + 1)
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [silenciadoAte])
+
+  // O alerta de pedido repete enquanto houver pedido pendente que ninguém viu
+  // (o de cliente esperando atendente já repetia): venda parada não pode
+  // depender de alguém ter ouvido a primeira vez.
+  const temPendenteNaoVisto = pendentesNaoVistos.length > 0
+  useEffect(() => {
+    if (!temPendenteNaoVisto) return
+    const id = window.setInterval(() => playOrderAlert(), REPETIR_ALERTA_PEDIDO_MS)
+    return () => window.clearInterval(id)
+  }, [temPendenteNaoVisto])
 
   // Kanban ao vivo: o processo principal busca (uma vez, para os dois) e
   // empurra a lista pronta por aqui — o renderer não faz mais o próprio
@@ -270,9 +419,19 @@ export default function App() {
     return () => window.clearInterval(interval)
   }, [configured])
 
+  // Sons: carrega depois de parear, ao voltar de Configurações e a cada hora —
+  // antes eram buscados uma vez, antes do pareamento, e ficavam no padrão.
   useEffect(() => {
+    if (!configured) return
     void loadNotificationSounds()
-  }, [])
+    const id = window.setInterval(() => { void loadNotificationSounds() }, 60 * 60 * 1000)
+    return () => window.clearInterval(id)
+  }, [configured])
+
+  useEffect(() => {
+    if (tabAnteriorRef.current === 'settings' && tab !== 'settings' && configured) void loadNotificationSounds()
+    tabAnteriorRef.current = tab
+  }, [tab, configured])
 
   // ── Histórico (pedidos com mais de 24h, fora do Kanban operacional) ────────
   const [historyOrders, setHistoryOrders] = useState<Order[]>([])
@@ -280,6 +439,8 @@ export default function App() {
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false)
   const [historyStatusFilter, setHistoryStatusFilter] = useState<OrderStatus | ''>('')
   const [historyHasMore, setHistoryHasMore] = useState(true)
+  const historyRef = useRef<Order[]>([])
+  useEffect(() => { historyRef.current = historyOrders }, [historyOrders])
 
   const loadHistory = useCallback(async (reset: boolean) => {
     reset ? setHistoryLoading(true) : setHistoryLoadingMore(true)
@@ -303,7 +464,7 @@ export default function App() {
       setHistoryOrders(previous => reset ? fetched : [...previous, ...fetched])
       setHistoryHasMore(hasMore)
     } catch {
-      addNotification('Não foi possível carregar o histórico')
+      notify('Não deu para carregar o histórico · tente de novo em instantes', 'erro')
     } finally {
       setHistoryLoading(false)
       setHistoryLoadingMore(false)
@@ -337,7 +498,8 @@ export default function App() {
   // pro alerta, mesmo com as outras normais.
   const conexoesWhatsappDesconectadas = connectionStates.filter(cs => cs.state !== 'open')
   const whatsappDisconnected = conexoesWhatsappDesconectadas.length > 0
-  const hasUrgentAlert = unacknowledgedOrders.length > 0 || conversationsNeedingAttention.length > 0 || whatsappDisconnected
+  const semImpressora = saude?.autoPrintSemImpressora === true && saude.conexoes.length > 0
+  const hasUrgentAlert = pendentes.length > 0 || conversationsNeedingAttention.length > 0 || whatsappDisconnected
 
   // Alerta sonoro toca UMA vez quando aparece, não em laço até reconhecer. O
   // som do pedido dispara em loadOrders() a cada pedido novo; o de mensagem,
@@ -419,44 +581,87 @@ export default function App() {
   }
 
   const updateStatus = useCallback(async (id: string, status: OrderStatus) => {
+    // Um clique por vez por pedido: com o botão travado (`enviando`) e esta
+    // guarda, duas pessoas/toques não mandam a mesma etapa duas vezes.
+    if (enviandoRef.current.has(id)) return
+
     // A conexão de origem viaja junto com o pedido. Sem ela, mudar o status de
     // um pedido da segunda loja iria para o servidor da primeira — que
     // responderia "não encontrado", ou acertaria outro pedido por acaso. Lido
     // de ordersRef (não do state `orders`) pra esta função manter identidade
     // estável entre renders — ver o comentário em ordersRef.
-    const alvo = ordersRef.current.find(o => o.id === id)
+    // Pedido do Histórico não está no kanban: cai no `historyRef`.
+    const alvo = ordersRef.current.find(o => o.id === id) ?? historyRef.current.find(o => o.id === id)
+    const noKanban = ordersRef.current.some(o => o.id === id)
     const doMarketplace = alvo ? ehMarketplace(alvo.channel) : false
     const anterior = alvo?.status
+    const rotulo = alvo ? orderLabel(alvo) : id.slice(0, 8).toUpperCase()
+
+    enviandoRef.current.add(id)
+    setEnviandoIds(new Set(enviandoRef.current))
+
+    // Confirmar pelo botão também é "ter visto": o mesmo reconhecimento de abrir o card.
+    if (noKanban && alvo && !alvo.acknowledged_at) ackOrder(id)
 
     // Resposta visual IMEDIATA para pedido de marketplace (iFood, 99Food): move
     // o card já e verifica com o marketplace em segundo plano. Se recusar ou
     // falhar, volta.
-    if (doMarketplace) {
+    if (doMarketplace && noKanban) {
       optimisticRef.current.set(id, { status, ts: Date.now() })
       setOrdersSynced(previous => previous.map(order => order.id === id ? { ...order, status } : order))
     }
 
-    const res = await window.api.updateOrderStatus(id, status, alvo?.connectionId)
+    const aplicarNoHistorico = (novoStatus: OrderStatus) =>
+      setHistoryOrders(previous => previous.map(order => order.id === id ? { ...order, status: novoStatus } : order))
 
-    if (!res.ok) {
-      if (doMarketplace && anterior) {
+    try {
+      const res = await window.api.updateOrderStatus(id, status, alvo?.connectionId)
+
+      if (!res.ok) {
+        if (doMarketplace && anterior && noKanban) {
+          optimisticRef.current.delete(id)
+          setOrdersSynced(previous => previous.map(order => order.id === id ? { ...order, status: anterior } : order))
+        }
+        notify(res.error || `Não deu para atualizar o pedido #${rotulo} · tente de novo`, 'erro')
+        return
+      }
+      if (res.requested) {
+        // O marketplace aceitou processar. O card já está na posição nova; o
+        // evento real confirma no próximo polling e o merge de loadOrders segura
+        // a posição até lá (ou reverte no timeout de 90s). A mensagem já vem do
+        // servidor nomeando o marketplace certo (ver applyOrderStatusChange).
+        notify(res.message || `Pedido #${rotulo} enviado ao ${nomeMarketplace(alvo?.channel)} · aguardando a confirmação dele`)
+        return
+      }
+      optimisticRef.current.delete(id)
+      setOrdersSynced(previous => previous.map(order => order.id === id ? { ...order, status } : order))
+      aplicarNoHistorico(status)
+    } catch {
+      if (doMarketplace && anterior && noKanban) {
         optimisticRef.current.delete(id)
         setOrdersSynced(previous => previous.map(order => order.id === id ? { ...order, status: anterior } : order))
       }
-      addNotification(res.error || 'Não foi possível atualizar o status do pedido')
-      return
+      notify(`Não deu para atualizar o pedido #${rotulo} · sem resposta do servidor`, 'erro')
+    } finally {
+      enviandoRef.current.delete(id)
+      setEnviandoIds(new Set(enviandoRef.current))
     }
-    if (res.requested) {
-      // O marketplace aceitou processar. O card já está na posição nova; o
-      // evento real confirma no próximo polling e o merge de loadOrders segura
-      // a posição até lá (ou reverte no timeout de 90s). A mensagem já vem do
-      // servidor nomeando o marketplace certo (ver applyOrderStatusChange).
-      addNotification(res.message || 'Enviado ao marketplace')
-      return
-    }
-    optimisticRef.current.delete(id)
-    setOrdersSynced(previous => previous.map(order => order.id === id ? { ...order, status } : order))
-  }, [addNotification])
+  }, [notify, ackOrder])
+
+  // Mudar status a partir do Histórico mexe em pedido antigo e já fechado:
+  // pergunta antes, como o painel web faz.
+  const updateStatusHistorico = useCallback(async (id: string, status: OrderStatus) => {
+    const alvo = historyRef.current.find(o => o.id === id)
+    const rotulo = alvo ? orderLabel(alvo) : id.slice(0, 8).toUpperCase()
+    const ok = await confirmar({
+      titulo: `Mudar o pedido ${rotulo} para "${STATUS_LABELS[status]}"?`,
+      descricao: 'Este pedido já saiu do kanban. A mudança vale para a loja e para o cliente que acompanha o pedido.',
+      confirmarRotulo: `Mudar para ${STATUS_LABELS[status]}`,
+      cancelarRotulo: 'Manter pedido',
+      perigo: status === 'cancelled',
+    })
+    if (ok) await updateStatus(id, status)
+  }, [confirmar, updateStatus])
 
   const markReadyByScan = useCallback(async (id: string, connectionId?: string): Promise<ScanReadyResult> => {
     const result = await window.api.scanOrderReady(id, connectionId)
@@ -483,24 +688,53 @@ export default function App() {
   useBarcodeScanner({
     ordersRef,
     markReady: markReadyByScan,
-    notify: addNotification,
+    notify,
     enabled: configured && scannerReady,
   })
 
   const [cancelandoIfood, setCancelandoIfood] = useState<Order | null>(null)
   const [pausePanelOpen, setPausePanelOpen] = useState(false)
 
+  // Devolve a mensagem de erro, ou null se a comanda saiu.
+  const imprimirPedido = useCallback(async (order: Order): Promise<string | null> => {
+    let resultado: ResultadoImpressao
+    try {
+      resultado = await window.api.printOrder(order)
+    } catch {
+      resultado = { ok: false, error: 'a impressora não respondeu' }
+    }
+    if (impressaoOk(resultado)) {
+      setFalhasImpressao(previous => previous.filter(f => f.orderId !== order.id))
+      return null
+    }
+    const motivo = erroImpressao(resultado)
+    notify(`A comanda do pedido ${orderLabel(order)} não saiu · ${motivo}`, 'erro')
+    return motivo
+  }, [notify])
+
   const printOrder = useCallback(async (order: Order) => {
-    const result = await window.api.printOrder(order)
-    if (result === 'no-printer') addNotification('Configure a impressora nas configurações')
-    if (result === 'error') addNotification('Não foi possível imprimir a comanda')
-  }, [addNotification])
+    const erro = await imprimirPedido(order)
+    if (erro === null) notify(`Comanda do pedido ${orderLabel(order)} enviada para a impressora`)
+  }, [imprimirPedido, notify])
+
+  // "Imprimir de novo" da faixa: acha o pedido na tela (kanban ou histórico).
+  async function reimprimirDaFaixa(orderId: string): Promise<string | null> {
+    const pedido = ordersRef.current.find(o => o.id === orderId) ?? historyRef.current.find(o => o.id === orderId)
+    if (!pedido) {
+      const motivo = 'o pedido não está mais na tela'
+      notify(`Não deu para reimprimir · ${motivo}. Abra o pedido e imprima por ele.`, 'erro')
+      return motivo
+    }
+    const erro = await imprimirPedido(pedido)
+    if (erro === null) notify(`Comanda do pedido ${orderLabel(pedido)} impressa`)
+    return erro
+  }
 
   async function toggleAutoPrint() {
     const nextValue = !autoPrint
     await window.api.saveConfig({ autoPrint: nextValue ? 'true' : 'false' })
     setAutoPrint(nextValue)
-    addNotification(nextValue ? 'Impressão automática ativada' : 'Impressão automática desativada')
+    notify(nextValue ? 'Impressão automática ativa' : 'Impressão automática pausada')
   }
 
   async function handleSettingsSaved() {
@@ -538,7 +772,7 @@ export default function App() {
   return (
     <div className={`h-screen flex flex-col bg-[var(--bg)] text-[var(--text)] select-none overflow-hidden ${windowMaximized ? '' : 'border border-[var(--border)] rounded-xl'}`}>
       <div
-        className="flex min-h-12 items-center gap-3 pl-4 pr-0 bg-[var(--surface)] border-b border-[var(--border)] flex-shrink-0 shadow-[var(--shadow-sm)]"
+        className="barra-topo flex min-h-12 flex-wrap items-center gap-x-3 gap-y-1 py-1 pl-4 pr-0 bg-[var(--surface)] border-b border-[var(--border)] flex-shrink-0 shadow-[var(--shadow-sm)]"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         onDoubleClick={handleTitleBarDoubleClick}
       >
@@ -576,67 +810,91 @@ export default function App() {
           ))}
         <div className="flex-1" />
 
-        {notifications.length > 0 && (
-          <div className="bg-[var(--primary-tint)] border border-amber-500/30 rounded-xl px-3 py-1 text-xs text-[var(--primary-hover)] max-w-64 truncate">
-            🔔 {notifications[0]}
-          </div>
-        )}
-
-        <div className="flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+        <div className="flex items-center gap-1 flex-wrap" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           {configured && (
             <>
-              <button onClick={() => void loadOrders()} title="Atualizar pedidos" className="p-1.5 rounded-lg hover:bg-[var(--border-light)] text-[var(--text-muted)] hover:text-[var(--text)] transition-colors">
+              {/* Silêncio temporário: o indicador fica sempre visível, para
+                  ninguém achar que o som está ligado (ou esquecer que mutou). */}
+              {silenciadoAte > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => silenciarAlertas(0)}
+                  title="Voltar o som dos alertas"
+                  aria-label={`Alertas mudos por mais ${formatarContagem(silenciadoAte - Date.now())}. Tocar para voltar o som`}
+                  className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-bold bg-[var(--primary-tint)] text-[var(--primary-hover)] border border-amber-500/30"
+                >
+                  <BellOff size={14} aria-hidden="true" />
+                  Mudo · {formatarContagem(silenciadoAte - Date.now())}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => silenciarAlertas(5)}
+                  title="Silenciar os alertas sonoros por 5 minutos"
+                  aria-label="Silenciar alertas por 5 minutos"
+                  className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-semibold text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--border-light)] transition-colors"
+                >
+                  <BellOff size={14} aria-hidden="true" />
+                  Silenciar 5 min
+                </button>
+              )}
+              <button type="button" onClick={() => void loadOrders()} title="Atualizar pedidos" aria-label="Atualizar pedidos" className="p-1.5 rounded-lg hover:bg-[var(--border-light)] text-[var(--text-muted)] hover:text-[var(--text)] transition-colors">
                 <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
               </button>
               <button
+                type="button"
                 onClick={() => void toggleAutoPrint()}
-                title={autoPrint ? 'Impressão automática ligada' : 'Impressão automática desligada'}
-                className={`p-1.5 rounded-lg transition-colors ${autoPrint ? 'text-[var(--success)] hover:bg-green-500/10' : 'text-[var(--text-xmuted)] hover:bg-[var(--border-light)]'}`}
+                title={semImpressora ? 'Impressão automática ativa, mas sem impressora escolhida' : autoPrint ? 'Impressão automática ativa' : 'Impressão automática pausada'}
+                aria-label={semImpressora ? 'Impressão automática ativa, mas sem impressora escolhida' : autoPrint ? 'Impressão automática ativa. Tocar para pausar' : 'Impressão automática pausada. Tocar para ativar'}
+                className={`p-1.5 rounded-lg transition-colors ${semImpressora ? 'text-[var(--danger)] bg-red-500/10 hover:bg-red-500/20' : autoPrint ? 'text-[var(--success)] hover:bg-green-500/10' : 'text-[var(--text-xmuted)] hover:bg-[var(--border-light)]'}`}
               >
                 <Printer size={14} />
               </button>
               <button
+                type="button"
                 onClick={() => setPausePanelOpen(v => !v)}
-                title="Pausar loja (cardápio próprio / iFood)"
+                title="Pausar a loja (cardápio próprio, iFood e 99Food)"
+                aria-label="Pausar a loja (cardápio próprio, iFood e 99Food)"
                 className={`p-1.5 rounded-lg transition-colors ${pausePanelOpen ? 'text-[var(--primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--border-light)]'}`}
               >
                 <Power size={14} />
               </button>
             </>
           )}
-          <button onClick={() => setTab('kanban')} title="Pedidos" className={`relative p-1.5 rounded-lg transition-colors ${tab === 'kanban' ? 'text-[var(--primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--border-light)]'}`}>
+          <BotaoNav ativo={tab === 'kanban'} rotulo="Pedidos" onClick={() => setTab('kanban')}>
             <LayoutGrid size={14} />
-            {unacknowledgedOrders.length > 0 && (
+            {pendentes.length > 0 && (
               <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
-                {unacknowledgedOrders.length}
+                {pendentes.length}
               </span>
             )}
-          </button>
+          </BotaoNav>
           {configured && (
-            <button onClick={() => setTab('novo-pedido')} title="Novo pedido" className={`p-1.5 rounded-lg transition-colors ${tab === 'novo-pedido' ? 'text-[var(--primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--border-light)]'}`}>
+            <BotaoNav ativo={tab === 'novo-pedido'} rotulo="Novo pedido" onClick={() => setTab('novo-pedido')}>
               <Plus size={14} />
-            </button>
+            </BotaoNav>
           )}
           {configured && (
-            <button onClick={() => setTab('whatsapp')} title="WhatsApp" className={`relative p-1.5 rounded-lg transition-colors ${tab === 'whatsapp' ? 'text-[var(--primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--border-light)]'}`}>
+            <BotaoNav ativo={tab === 'whatsapp'} rotulo="WhatsApp" onClick={() => setTab('whatsapp')}>
               {whatsappDisconnected ? <WifiOff size={14} className="text-[var(--danger)]" /> : <MessageCircle size={14} />}
               {conversationsNeedingAttention.length > 0 && (
                 <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
                   {conversationsNeedingAttention.length}
                 </span>
               )}
-            </button>
+            </BotaoNav>
           )}
           {configured && (
-            <button onClick={() => setTab('historico')} title="Histórico" className={`p-1.5 rounded-lg transition-colors ${tab === 'historico' ? 'text-[var(--primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--border-light)]'}`}>
+            <BotaoNav ativo={tab === 'historico'} rotulo="Histórico" onClick={() => setTab('historico')}>
               <History size={14} />
-            </button>
+            </BotaoNav>
           )}
-          <button onClick={() => setTab('settings')} title="Configurações" className={`p-1.5 rounded-lg transition-colors ${tab === 'settings' ? 'text-[var(--primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--border-light)]'}`}>
+          <BotaoNav ativo={tab === 'settings'} rotulo="Configurações" onClick={() => setTab('settings')}>
             <SettingsIcon size={14} />
-          </button>
+          </BotaoNav>
         </div>
-        <div className="ml-1 flex h-12 self-stretch border-l border-[var(--border)]" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+        {/* Minimizar/maximizar/fechar são da janela do Windows; no tablet não há janela. */}
+        <div className={`ml-1 h-12 self-stretch border-l border-[var(--border)] ${window.api.plataforma === 'android' ? 'hidden' : 'flex'}`} style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           <button onClick={() => window.api.minimizeWindow()} title="Minimizar" aria-label="Minimizar" className="w-11 flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--border-light)] hover:text-[var(--text)] transition-colors">
             <Minus size={16} />
           </button>
@@ -649,37 +907,48 @@ export default function App() {
         </div>
       </div>
 
-      {tab !== 'whatsapp' && tab !== 'settings' && tab !== 'novo-pedido' && (
-        <DisputasPanel notify={addNotification} temIfood={stores.some(s => s.ifoodConectado)} />
+      {/* Faixas fixas: valem em TODAS as abas e só saem quando o problema acaba. */}
+      <FaixaAlertas
+        saude={saude}
+        falhas={falhasImpressao}
+        onReimprimir={reimprimirDaFaixa}
+        onDispensarFalha={orderId => setFalhasImpressao(previous => previous.filter(f => f.orderId !== orderId))}
+        onAbrirConfiguracoes={() => setTab('settings')}
+        audioBloqueado={getEstadoAudio() === 'bloqueado'}
+        onLiberarAudio={tentarLiberarAudio}
+      />
+
+      {tab !== 'whatsapp' && tab !== 'settings' && (
+        <DisputasPanel notify={notify} temIfood={stores.some(s => s.ifoodConectado)} />
       )}
 
-      {hasUrgentAlert && tab !== 'whatsapp' && tab !== 'novo-pedido' && (
+      {hasUrgentAlert && tab !== 'whatsapp' && (
         <div className="flex items-center justify-between gap-3 flex-wrap px-3 py-2 bg-red-500/10 border-b border-red-500/30 flex-shrink-0">
           <div className="flex items-center gap-3 flex-wrap text-xs">
-            {unacknowledgedOrders.length > 0 && (
-                <span className="flex items-center gap-1.5 text-[var(--primary)] font-bold">
-                🔔 {unacknowledgedOrders.length} pedido{unacknowledgedOrders.length > 1 ? 's' : ''} novo{unacknowledgedOrders.length > 1 ? 's' : ''} não visto{unacknowledgedOrders.length > 1 ? 's' : ''}
+            {pendentes.length > 0 && (
+              <span className="flex items-center gap-1.5 text-[var(--primary)] font-bold">
+                {pendentes.length} pedido{pendentes.length > 1 ? 's' : ''} pendente{pendentes.length > 1 ? 's' : ''}
               </span>
             )}
             {whatsappDisconnected && (
-                <span className="flex items-center gap-1.5 text-[var(--danger)] font-bold">
+              <span className="flex items-center gap-1.5 text-[var(--danger)] font-bold">
                 <WifiOff size={12} /> WhatsApp desconectado{rotuloLojasDesconectadas(conexoesWhatsappDesconectadas)}
               </span>
             )}
             {conversationsNeedingAttention.length > 0 && (
-                <span className="flex items-center gap-1.5 text-[var(--primary)] font-bold">
+              <span className="flex items-center gap-1.5 text-[var(--primary)] font-bold">
                 <MessageCircle size={12} /> {conversationsNeedingAttention.length} cliente{conversationsNeedingAttention.length > 1 ? 's' : ''} esperando resposta no WhatsApp
               </span>
             )}
           </div>
           <div className="flex items-center gap-2">
-            {unacknowledgedOrders.length > 0 && tab !== 'kanban' && (
-              <button onClick={() => setTab('kanban')} className="text-[11px] px-2.5 py-1 rounded-lg bg-[var(--primary)] text-[var(--primary-fg)] font-bold">
+            {pendentes.length > 0 && tab !== 'kanban' && (
+              <button type="button" onClick={() => setTab('kanban')} className="text-[11px] px-2.5 py-1 rounded-lg bg-[var(--primary)] text-[var(--primary-fg)] font-bold">
                 Ver pedidos
               </button>
             )}
             {conversationsNeedingAttention.length > 0 && (
-              <button onClick={() => openWhatsappConversation(conversationsNeedingAttention[0])} className="text-[11px] px-2.5 py-1 rounded-lg bg-[var(--primary)] text-[var(--primary-fg)] font-bold">
+              <button type="button" onClick={() => openWhatsappConversation(conversationsNeedingAttention[0])} className="text-[11px] px-2.5 py-1 rounded-lg bg-[var(--primary)] text-[var(--primary-fg)] font-bold">
                 Ver conversa
               </button>
             )}
@@ -693,8 +962,14 @@ export default function App() {
         {tab === 'novo-pedido' && (
           <NovoPedido
             stores={stores}
-            onPedidoCriado={({ totalCents }) => {
-              addNotification(`Pedido criado — ${fmtMoney(totalCents)}`)
+            onPedidoCriado={({ totalCents, orderId }: { totalCents: number; orderId?: string }) => {
+              // Este aparelho acabou de lançar o pedido: não toca o alerta de
+              // "pedido novo" nem fica pendente-não-visto (o reconhecimento sai quando o pedido aparece na lista, com a conexão certa). Se o id não vier do
+              // componente, o alerta toca como antes.
+              if (orderId) {
+                proprioIdsRef.current.add(orderId)
+              }
+              notify(`Pedido criado · ${fmtMoney(totalCents)}`)
               setTab('kanban')
             }}
           />
@@ -708,7 +983,7 @@ export default function App() {
               </div>
             )}
             {whatsappConversations.length === 0 ? (
-              <p className="text-center py-12 text-xs text-[var(--text-xmuted)]">Nenhuma conversa em atendimento manual no momento</p>
+              <p className="text-center py-12 text-xs text-[var(--text-xmuted)]">Nenhuma conversa esperando atendente ou em atendimento manual no momento</p>
             ) : (
               <div className="space-y-2">
                 {whatsappConversations.map(conversation => {
@@ -723,12 +998,12 @@ export default function App() {
                         <div className="flex items-center gap-1.5">
                           {needsAttention && <span className="w-2 h-2 rounded-full bg-[var(--primary)] flex-shrink-0" />}
                           <span className="text-sm font-medium text-[var(--text)] truncate">{conversation.phone}</span>
-                          <span className={`text-[9px] px-1.5 py-0.5 rounded-full border flex-shrink-0 ${
+                          <span className={`text-[11px] px-1.5 py-0.5 rounded-full border flex-shrink-0 ${
                             conversation.status === 'awaiting_human'
                               ? 'text-[var(--primary)] border-amber-500/30 bg-[var(--primary-tint)]'
                               : 'text-[var(--success)] border-green-500/30 bg-green-500/5'
                           }`}>
-                            {conversation.status === 'awaiting_human' ? 'aguardando' : 'manual'}
+                            {conversation.status === 'awaiting_human' ? 'Aguardando atendente' : 'Atendimento manual'}
                           </span>
                           {/* A etiqueta da loja só aparece com mais de uma ligada — ver o mesmo padrão no OrderCard. */}
                           {conversation.storeLabel && (
@@ -759,7 +1034,7 @@ export default function App() {
         {tab === 'historico' && (
           <div className="h-full overflow-y-auto p-3 space-y-3">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-xs text-[var(--text-muted)]">Pedidos com mais de 24h — saem do Kanban, mas ficam com o status em que pararam.</p>
+              <p className="text-xs text-[var(--text-muted)]">Pedidos com mais de 24h saem do kanban e ficam aqui com o status em que pararam.</p>
               <select
                 value={historyStatusFilter}
                 onChange={e => setHistoryStatusFilter(e.target.value as OrderStatus | '')}
@@ -778,7 +1053,7 @@ export default function App() {
               <>
                 <div className="space-y-2">
                   {historyOrders.map(order => (
-                    <OrderCard key={order.id} order={order} onStatus={updateStatus} onPrint={printOrder} onCancelIfood={setCancelandoIfood} agoraBucket={agoraBucket} />
+                    <OrderCard key={order.id} order={order} onStatus={updateStatusHistorico} onPrint={printOrder} onCancelIfood={setCancelandoIfood} agoraBucket={agoraBucket} enviando={enviandoIds.has(order.id)} />
                   ))}
                 </div>
                 {historyHasMore && (
@@ -798,10 +1073,11 @@ export default function App() {
         {tab === 'kanban' && !configured && (
           <div className="h-full flex items-center justify-center">
             <div className="text-center space-y-3">
-              <p className="text-4xl">⚙️</p>
-              <p className="font-semibold text-lg">Configure o app primeiro</p>
-              <p className="text-[var(--text-muted)] text-sm">Informe a URL do cardápio e o token de integração nas configurações.</p>
-              <button onClick={() => setTab('settings')} className="mt-2 px-5 py-2.5 bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-[var(--primary-fg)] font-semibold rounded-xl text-sm">Ir para configurações</button>
+              <p className="font-semibold text-lg">Ligue {window.api.plataforma === 'android' ? 'este tablet' : 'este computador'} à sua loja</p>
+              <p className="text-[var(--text-muted)] text-sm max-w-md mx-auto">
+                No painel, em Integrações › Ligar um aparelho, gere um código de 8 caracteres e digite em Configurações.
+              </p>
+              <button type="button" onClick={() => setTab('settings')} className="mt-2 px-5 py-2.5 bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-[var(--primary-fg)] font-semibold rounded-xl text-sm">Abrir configurações</button>
             </div>
           </div>
         )}
@@ -818,12 +1094,12 @@ export default function App() {
               // devolve array novo, então o `.sort` não mexe em `orders`.
               const columnOrders = orders
                 .filter(order => column.statuses.includes(order.status))
-                .sort((a, b) => compararFilaCozinha(a, b))
+                .sort((a, b) => compararFilaCozinha(a, b, agoraBucket * BUCKET_MS))
               return (
                 <div key={column.id} className="min-w-0 flex flex-col overflow-hidden rounded-xl border border-[var(--border)] border-t-4 bg-[var(--surface)]" style={{ borderTopColor: column.accent }}>
                   <div className="flex items-center justify-between px-3 py-2.5 flex-shrink-0">
                     <span className="font-bold text-sm text-[var(--text)]">{column.label}</span>
-                    <span className="text-[11px] font-bold rounded-full border border-[var(--border)] bg-white w-5 h-5 flex items-center justify-center" style={{ color: column.accent }}>{columnOrders.length}</span>
+                    <span className="text-xs font-bold rounded-full border border-[var(--border)] bg-white min-w-5 h-5 px-1 flex items-center justify-center" style={{ color: column.accent }}>{columnOrders.length}</span>
                   </div>
                   <div className={`flex-1 overflow-y-auto border-t border-[var(--border)] bg-[var(--surface-muted)] p-2 ${
                     // Só "Em preparo" ganha a largura extra do dobro — dois
@@ -833,7 +1109,7 @@ export default function App() {
                     column.id === 'prep' ? 'grid grid-cols-2 gap-2 auto-rows-min items-start' : 'space-y-2'
                   }`}>
                     {loading && columnOrders.length === 0 && <p className="col-span-2 text-center py-8 text-xs text-[var(--text-xmuted)]">Carregando...</p>}
-                    {!loading && columnOrders.length === 0 && <p className="col-span-2 text-center py-8 text-xs text-[var(--text-muted)]">Vazio</p>}
+                    {!loading && columnOrders.length === 0 && <p className="col-span-2 text-center py-8 px-3 text-xs text-[var(--text-muted)]">{column.id === 'prep' ? 'Nenhum pedido em preparo. Os pedidos novos entram aqui sozinhos.' : 'Nenhum pedido aqui. Eles entram nesta coluna sozinhos quando avançam de etapa.'}</p>}
                     {columnOrders.map(order => (
                       <OrderCard
                         key={order.id}
@@ -843,6 +1119,7 @@ export default function App() {
                         onCancelIfood={setCancelandoIfood}
                         onOpen={ackOrder}
                         agoraBucket={agoraBucket}
+                        enviando={enviandoIds.has(order.id)}
                         compact
                       />
                     ))}
@@ -855,11 +1132,33 @@ export default function App() {
         )}
       </div>
 
+      {/* Avisos: erro em vermelho e mais tempo na tela, texto inteiro (quebra de
+          linha, sem cortar), e um aviso informativo não atropela um erro. */}
+      {avisos.length > 0 && (
+        <div className="fixed top-14 right-3 z-50 flex flex-col gap-2 w-[min(24rem,calc(100vw-1.5rem))] pointer-events-none">
+          {avisos.map(aviso => (
+            <div
+              key={aviso.id}
+              role={aviso.tipo === 'erro' ? 'alert' : 'status'}
+              title={aviso.texto}
+              className={`pointer-events-auto rounded-xl border px-3 py-2 text-xs font-medium shadow-[var(--shadow-md)] break-words select-text ${
+                aviso.tipo === 'erro'
+                  ? 'bg-red-50 border-red-500/40 text-[var(--danger)]'
+                  : 'bg-[var(--primary-tint)] border-amber-500/30 text-[var(--primary-hover)]'
+              }`}
+              onClick={() => setAvisos(previous => previous.filter(a => a.id !== aviso.id))}
+            >
+              {aviso.texto}
+            </div>
+          ))}
+        </div>
+      )}
+
       {pausePanelOpen && (
         <StorePausePanel
           stores={stores.map(s => ({ id: s.id, storeName: s.storeName }))}
           onClose={() => setPausePanelOpen(false)}
-          notify={addNotification}
+          notify={notify}
         />
       )}
 
@@ -870,7 +1169,7 @@ export default function App() {
           connectionId={cancelandoIfood.connectionId}
           onClose={() => setCancelandoIfood(null)}
           onRequested={() => void loadOrders()}
-          notify={addNotification}
+          notify={notify}
         />
       )}
     </div>

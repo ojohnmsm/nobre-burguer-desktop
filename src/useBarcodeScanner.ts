@@ -23,7 +23,7 @@ interface EditableSnapshot {
 interface UseBarcodeScannerOptions {
   ordersRef: MutableRefObject<Order[]>
   markReady: (id: string, connectionId?: string) => Promise<ScanReadyResult>
-  notify: (message: string) => void
+  notify: (message: string, tipo?: 'info' | 'erro') => void
   enabled: boolean
 }
 
@@ -79,13 +79,13 @@ export function useBarcodeScanner({ ordersRef, markReady, notify, enabled }: Use
         return
       }
       if (payload === 'TESTE') {
-        notify('✅ Leitor de QR Code funcionando')
+        notify('Leitor de QR Code funcionando')
         return
       }
 
       const id = payload
       if (!UUID_PATTERN.test(id)) {
-        notify('QR Code da comanda inválido')
+        notify('QR Code da comanda inválido', 'erro')
         return
       }
       if (processingRef.current.has(id)) return
@@ -96,7 +96,7 @@ export function useBarcodeScanner({ ordersRef, markReady, notify, enabled }: Use
         // imediata quando o cartão já mostra que a transição não cabe.
         const proxima = proximaEtapa(pedido)
         if (!proxima || proxima.status !== 'ready_to_pickup') {
-          notify(`Pedido #${orderLabel(pedido)} está em "${STATUS_LABELS[pedido.status]}" — não dá pra marcar como pronto por aqui`)
+          notify(`Pedido #${orderLabel(pedido)} está em "${STATUS_LABELS[pedido.status]}" — não dá pra marcar como pronto por aqui`, 'erro')
           return
         }
       }
@@ -105,16 +105,16 @@ export function useBarcodeScanner({ ordersRef, markReady, notify, enabled }: Use
       try {
         const result = await markReady(id, pedido?.connectionId)
         if (!result.ok) {
-          notify(result.error)
+          notify(result.error, 'erro')
           return
         }
         if (result.requested) {
-          notify(`📡 Pedido #${result.label} enviado ao ${result.channel === 'ifood' ? 'iFood' : '99Food'} — aguardando confirmação`)
+          notify(`Pedido #${result.label} enviado ao ${result.channel === 'ifood' ? 'iFood' : '99Food'} · aguardando confirmação`)
           return
         }
-        notify(`✅ Pedido #${result.label} marcado como pronto`)
+        notify(`Pedido #${result.label} marcado como pronto`)
       } catch {
-        notify('Não foi possível processar a comanda escaneada')
+        notify('Não deu para processar a comanda escaneada · tente ler o QR de novo', 'erro')
       } finally {
         processingRef.current.delete(id)
       }

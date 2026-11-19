@@ -27,6 +27,19 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('print-error', listener)
     return () => ipcRenderer.removeListener('print-error', listener)
   },
+  onFalhaImpressao: (cb: (f: { orderId: string; rotulo: string; motivo: string; viasQueFaltaram: number }) => void) => {
+    const listener = (_e: unknown, f: { orderId: string; rotulo: string; motivo: string; viasQueFaltaram: number }) => cb(f)
+    ipcRenderer.on('falha-impressao', listener)
+    return () => ipcRenderer.removeListener('falha-impressao', listener)
+  },
+  onSaude: (cb: (s: unknown) => void) => {
+    const listener = (_e: unknown, s: unknown) => cb(s)
+    ipcRenderer.on('saude-app', listener)
+    // Pede o último retrato já calculado: sem isto, quem assina entre dois
+    // ciclos do vigia (7 s) ficaria sem estado até o próximo.
+    ipcRenderer.send('saude-assinou')
+    return () => ipcRenderer.removeListener('saude-app', listener)
+  },
   onNewOrder: (cb: (info: { id: string; label: string; canal: string; customerName: string; isPickup: boolean }) => void) => {
     const listener = (_e: unknown, info: { id: string; label: string; canal: string; customerName: string; isPickup: boolean }) => cb(info)
     ipcRenderer.on('novo-pedido', listener)

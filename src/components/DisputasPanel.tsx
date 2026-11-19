@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import type { IfoodDispute } from '../electron-api'
+import { useConfirmar, usePedirTexto } from './Confirmar'
 
 /**
  * Disputas do iFood (Plataforma de Negociação) esperando resposta da loja.
@@ -44,7 +45,9 @@ function reais(cents: number): string {
   return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
-export function DisputasPanel({ notify, temIfood }: { notify: (message: string) => void; temIfood: boolean }) {
+export function DisputasPanel({ notify, temIfood }: { notify: (message: string, tipo?: 'info' | 'erro') => void; temIfood: boolean }) {
+  const confirmar = useConfirmar()
+  const pedirTexto = usePedirTexto()
   const [disputas, setDisputas] = useState<IfoodDispute[]>([])
   const [carregando, setCarregando] = useState(true)
   const [ocupado, setOcupado] = useState<string | null>(null)
@@ -74,14 +77,31 @@ export function DisputasPanel({ notify, temIfood }: { notify: (message: string) 
   async function responder(disputa: IfoodDispute, resposta: 'accept' | 'reject') {
     let motivo: string | null = null
     if (resposta === 'reject') {
-      motivo = window.prompt('Motivo da recusa (o iFood exige):')?.trim() || null
+      motivo = await pedirTexto({
+        titulo: `Recusar a contestação${disputa.displayId ? ` do pedido ${disputa.displayId}` : ''}?`,
+        descricao: 'O pedido é mantido e o iFood recebe o motivo. Ele exige uma explicação.',
+        rotuloCampo: 'Motivo da recusa',
+        obrigatorio: true,
+        confirmarRotulo: 'Recusar contestação',
+        perigo: true,
+      })
       if (!motivo) return
+    } else {
+      const valor = disputa.refundMaxCents != null ? ` de até ${reais(disputa.refundMaxCents)}` : ''
+      const ok = await confirmar({
+        titulo: `Reembolsar o cliente${disputa.displayId ? ` do pedido ${disputa.displayId}` : ''}?`,
+        descricao: `O reembolso${valor} sai do repasse da loja e não dá para desfazer.`,
+        confirmarRotulo: 'Reembolsar cliente',
+        cancelarRotulo: 'Voltar',
+        perigo: true,
+      })
+      if (!ok) return
     }
     setOcupado(disputa.disputeId)
     try {
       const res = await window.api.respondIfoodDispute(disputa.disputeId, resposta, motivo, disputa.connectionId)
-      if (!res.ok) { notify(res.error || 'Não foi possível responder a disputa'); return }
-      notify(resposta === 'accept' ? 'Disputa aceita' : 'Disputa recusada')
+      if (!res.ok) { notify(res.error || 'Não deu para responder · o iFood não aceitou a resposta', 'erro'); return }
+      notify(resposta === 'accept' ? 'Contestação aceita' : 'Contestação recusada')
       await carregar()
     } finally {
       setOcupado(null)
@@ -135,23 +155,25 @@ export function DisputasPanel({ notify, temIfood }: { notify: (message: string) 
             )}
 
             <p className="text-[10px] text-[var(--text-muted)]">
-              <span className="text-[var(--primary)] font-semibold">Aceitar</span> reembolsa o cliente · <span className="text-[var(--danger)] font-semibold">Recusar</span> mantém o pedido
+              <span className="text-[var(--primary)] font-semibold">Reembolsar cliente</span> devolve o dinheiro, que sai do repasse da loja · <span className="text-[var(--danger)] font-semibold">Recusar contestação</span> mantém o pedido
             </p>
 
             <div className="flex gap-2">
               <button
                 onClick={() => void responder(disputa, 'accept')}
                 disabled={ocupado === disputa.disputeId}
-                className="flex-1 text-[11px] px-2 py-1 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:opacity-40"
+                aria-label="Reembolsar cliente"
+                className="flex-1 min-h-10 text-xs px-2 py-2 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:opacity-40"
               >
-                {ocupado === disputa.disputeId ? <Loader2 size={11} className="animate-spin mx-auto" /> : 'Aceitar'}
+                {ocupado === disputa.disputeId ? <Loader2 size={11} className="animate-spin mx-auto" /> : 'Reembolsar cliente'}
               </button>
               <button
                 onClick={() => void responder(disputa, 'reject')}
                 disabled={ocupado === disputa.disputeId}
-                className="flex-1 text-[11px] px-2 py-1 rounded-lg border border-red-500/40 text-[var(--danger)] disabled:opacity-40"
+                aria-label="Recusar contestação"
+                className="flex-1 min-h-10 text-xs px-2 py-2 rounded-lg border border-red-500/40 text-[var(--danger)] disabled:opacity-40"
               >
-                Recusar
+                Recusar contestação
               </button>
             </div>
           </div>
